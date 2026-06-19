@@ -1,0 +1,23 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "A user of the Chrome extension",
+      "type": "object",
+      "properties": {
+        "email": { "type": "string" },
+        "holdedApiKey": { "type": "string" },
+        "holdedUserId": { "type": "string" },
+        "createdAt": { "type": "number", "description": "timestamp" },
+        "updatedAt": { "type": "number", "description": "timestamp" }
+      },
+      "required": ["email", "createdAt", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/User" },
+      "description": "User profiles and settings"
+    }
+  }
+}

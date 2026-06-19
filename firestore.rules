@@ -1,0 +1,46 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() { return request.auth != null; }
+    function isOwner(userId) { return isSignedIn() && request.auth.uid == userId; }
+    function incoming() { return request.resource.data; }
+    function existing() { return resource.data; }
+    
+    function isValidUser(data) {
+      return data.email is string && data.email.size() > 0 && data.email.size() <= 200
+             && data.createdAt is timestamp
+             && data.updatedAt is timestamp
+             && (!('holdedApiKey' in data) || data.holdedApiKey == null || (data.holdedApiKey is string && data.holdedApiKey.size() <= 200))
+             && (!('holdedUserId' in data) || data.holdedUserId == null || (data.holdedUserId is string && data.holdedUserId.size() <= 200));
+    }
+
+    match /users/{userId} {
+      allow get: if isOwner(userId);
+      allow list: if false;
+
+      allow create: if isOwner(userId)
+                    && isValidUser(incoming())
+                    && incoming().email == request.auth.token.email
+                    && incoming().createdAt == request.time
+                    && incoming().updatedAt == request.time;
+      
+      allow update: if isOwner(userId)
+                    && isValidUser(incoming())
+                    // Immutable fields
+                    && incoming().email == existing().email
+                    && incoming().createdAt == existing().createdAt
+                    && incoming().updatedAt == request.time
+                    // Actions allowed:
+                    && (
+                      incoming().diff(existing()).affectedKeys().hasOnly(['holdedApiKey', 'holdedUserId', 'updatedAt'])
+                    );
+                    
+      allow delete: if isOwner(userId);
+    }
+  }
+}

@@ -1,0 +1,44 @@
+{
+  "manifest_version": 3,
+  "name": "Holded x Google Workspace Sync",
+  "description": "Una extensión para integrar Holded CRM y Proyectos con una experiencia estilo Google Workspace.",
+  "version": "1.0.0",
+  "action": {
+    "default_title": "Abrir Holded Sync"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://mail.google.com/*",
+        "https://chat.google.com/*",
+        "https://calendar.google.com/*",
+        "https://drive.google.com/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_end"
+    }
+  ],
+  "permissions": [
+    "storage",
+    "activeTab",
+    "identity",
+    "identity.email"
+  ],
+  "host_permissions": [
+    "https://api.holded.com/*"
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["index.html", "assets/*"],
+      "matches": [
+        "https://mail.google.com/*",
+        "https://chat.google.com/*",
+        "https://calendar.google.com/*",
+        "https://drive.google.com/*"
+      ]
+    }
+  ]
+}

@@ -27,6 +27,9 @@ async function startServer() {
         if (req.headers.key) {
           proxyReq.setHeader('key', req.headers.key);
         }
+        if (req.headers.authorization) {
+          proxyReq.setHeader('Authorization', req.headers.authorization);
+        }
       },
       proxyRes: (proxyRes, req, res) => {
         // Log the response status from holded

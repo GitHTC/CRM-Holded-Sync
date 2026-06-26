@@ -4,7 +4,7 @@ import { useAppContext } from '../context/AppContext';
 import { Spinner } from './Spinner';
 import { format } from 'date-fns';
 import { es } from 'date-fns/locale';
-import { LayoutGrid, List, Plus, Trash2, Edit2, ChevronDown, Check, X, Search, User as UserIcon, Phone, Users, Mail, Plane, Utensils, FileText, StickyNote, Clock, Calendar } from 'lucide-react';
+import { LayoutGrid, List, Plus, Trash2, Edit2, ChevronDown, ChevronUp, Check, X, Search, User as UserIcon, Phone, Users, Mail, Plane, Utensils, FileText, StickyNote, Clock, Calendar, TrendingUp, Target } from 'lucide-react';
 import { cn } from '../lib/utils';
 
 const ACTIVITY_TYPES = [
@@ -47,6 +47,92 @@ export function CRMView() {
   const [isEditingLead, setIsEditingLead] = useState(false);
   const [editLeadData, setEditLeadData] = useState({ name: '', value: 0 });
   const [statusUpdating, setStatusUpdating] = useState<number | null>(null);
+
+  const [stagesOrder, setStagesOrder] = useState<Record<string, string[]>>({});
+
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem('holded_stages_sort_order');
+      if (saved) {
+        setStagesOrder(JSON.parse(saved));
+      }
+    } catch (e) {
+      console.error('Error loading stages orders from localStorage', e);
+    }
+  }, []);
+
+  const saveStageOrder = (stageId: string, leadIds: string[]) => {
+    const newOrder = { ...stagesOrder, [stageId]: leadIds };
+    setStagesOrder(newOrder);
+    try {
+      localStorage.setItem('holded_stages_sort_order', JSON.stringify(newOrder));
+    } catch (e) {
+      console.error('Error saving stages order to localStorage', e);
+    }
+  };
+
+  const getSortedStageLeads = (stageId: string, stageLeads: any[]) => {
+    const savedOrder = stagesOrder[stageId] || [];
+    return [...stageLeads].sort((a, b) => {
+      const indexA = savedOrder.indexOf(a.id);
+      const indexB = savedOrder.indexOf(b.id);
+      if (indexA !== -1 && indexB !== -1) return indexA - indexB;
+      if (indexA !== -1) return -1;
+      if (indexB !== -1) return 1;
+      return 0;
+    });
+  };
+
+  const moveLeadInStage = (leadId: string, stageId: string, direction: 'up' | 'down', stageLeads: any[]) => {
+    const sortedLeads = getSortedStageLeads(stageId, stageLeads);
+    const leadIds = sortedLeads.map(l => l.id);
+    const index = leadIds.indexOf(leadId);
+    if (index === -1) return;
+
+    const targetIndex = direction === 'up' ? index - 1 : index + 1;
+    if (targetIndex < 0 || targetIndex >= leadIds.length) return;
+
+    // Swap elements
+    const temp = leadIds[index];
+    leadIds[index] = leadIds[targetIndex];
+    leadIds[targetIndex] = temp;
+
+    saveStageOrder(stageId, leadIds);
+  };
+
+  const handleDropOnLead = async (draggedLeadId: string, targetLeadId: string, stageId: string, stageLeads: any[]) => {
+    if (draggedLeadId === targetLeadId) return;
+
+    const draggedLead = leads.find(l => l.id === draggedLeadId);
+    if (!draggedLead) return;
+    const isChangingStage = draggedLead.stageId !== stageId;
+
+    if (isChangingStage) {
+      try {
+        await crmService.updateLeadStage(holdedApiKey, draggedLeadId, stageId);
+        setLeads(prev => prev.map(l => l.id === draggedLeadId ? { ...l, stageId } : l));
+        if (selectedLead?.id === draggedLeadId) {
+          setSelectedLead(prev => ({ ...prev, stageId }));
+        }
+      } catch (e) {
+        alert("Error actualizando etapa");
+        return;
+      }
+    }
+
+    // Now compute the new order in this stage
+    const currentTargetLeads = getSortedStageLeads(stageId, stageLeads);
+    let leadIds = currentTargetLeads.map(l => l.id).filter(id => id !== draggedLeadId);
+
+    const targetIndex = leadIds.indexOf(targetLeadId);
+    if (targetIndex !== -1) {
+      leadIds.splice(targetIndex, 0, draggedLeadId);
+    } else {
+      leadIds.push(draggedLeadId);
+    }
+
+    saveStageOrder(stageId, leadIds);
+  };
   
   const [activities, setActivities] = useState<any[]>([]);
   const [loadingActivities, setLoadingActivities] = useState(false);
@@ -262,6 +348,31 @@ export function CRMView() {
   });
   const filteredContacts = contacts.filter(c => c.name?.toLowerCase().includes(contactSearch.toLowerCase()));
 
+  const funnelStats = React.useMemo(() => {
+    const funnelLeads = leads.filter(l => l.funnelId === selectedFunnel);
+    const openLeads = funnelLeads.filter(l => l.status === 0);
+    const wonLeads = funnelLeads.filter(l => l.status === 1);
+    const lostLeads = funnelLeads.filter(l => l.status === 2 || l.status === -1);
+    
+    const openValue = openLeads.reduce((sum, l) => sum + (Number(l.value) || 0), 0);
+    const wonValue = wonLeads.reduce((sum, l) => sum + (Number(l.value) || 0), 0);
+    const lostValue = lostLeads.reduce((sum, l) => sum + (Number(l.value) || 0), 0);
+    
+    const totalClosed = wonLeads.length + lostLeads.length;
+    const conversionRate = totalClosed > 0 ? Math.round((wonLeads.length / totalClosed) * 100) : 0;
+    
+    return {
+      openCount: openLeads.length,
+      openValue,
+      wonCount: wonLeads.length,
+      wonValue,
+      lostCount: lostLeads.length,
+      lostValue,
+      totalCount: funnelLeads.length,
+      conversionRate
+    };
+  }, [leads, selectedFunnel]);
+
   if (loading && leads.length === 0) return <Spinner />;
 
   return (
@@ -274,7 +385,7 @@ export function CRMView() {
             className="w-full bg-gray-50 border border-gray-200 rounded px-2 py-1.5 text-sm font-semibold text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
           >
              {funnels.map(f => (
-               <option key={f.id} value={f.id}>{f.name}</option>
+                <option key={f.id} value={f.id}>{f.name}</option>
              ))}
           </select>
         </div>
@@ -317,6 +428,49 @@ export function CRMView() {
         </div>
       </div>
 
+      {/* KPI Dashboard Summary Banner */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 animate-in fade-in duration-300">
+        <div className="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm flex items-center gap-3">
+          <div className="w-10 h-10 bg-blue-50 text-blue-600 rounded-xl flex items-center justify-center shrink-0">
+            <LayoutGrid size={18} />
+          </div>
+          <div className="min-w-0">
+            <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Oportunidades</p>
+            <h3 className="text-sm font-bold text-gray-800 mt-0.5">{funnelStats.totalCount} leads</h3>
+          </div>
+        </div>
+
+        <div className="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm flex items-center gap-3">
+          <div className="w-10 h-10 bg-amber-50 text-amber-600 rounded-xl flex items-center justify-center shrink-0">
+            <TrendingUp size={18} />
+          </div>
+          <div className="min-w-0">
+            <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">En Curso (Pipeline)</p>
+            <h3 className="text-sm font-bold text-gray-800 mt-0.5 truncate">€{funnelStats.openValue.toLocaleString()}</h3>
+          </div>
+        </div>
+
+        <div className="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm flex items-center gap-3">
+          <div className="w-10 h-10 bg-green-50 text-green-600 rounded-xl flex items-center justify-center shrink-0">
+            <Target size={18} />
+          </div>
+          <div className="min-w-0">
+            <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Ganado (Won)</p>
+            <h3 className="text-sm font-bold text-green-600 mt-0.5 truncate">€{funnelStats.wonValue.toLocaleString()}</h3>
+          </div>
+        </div>
+
+        <div className="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm flex items-center gap-3">
+          <div className="w-10 h-10 bg-purple-50 text-purple-600 rounded-xl flex items-center justify-center shrink-0">
+            <Check size={18} />
+          </div>
+          <div className="min-w-0">
+            <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Conversión</p>
+            <h3 className="text-sm font-bold text-gray-800 mt-0.5">{funnelStats.conversionRate}%</h3>
+          </div>
+        </div>
+      </div>
+
       <div className="flex-1 overflow-auto -mx-4 px-4 pb-20">
         {viewMode === 'list' ? (
           <div className="space-y-2">
@@ -344,6 +498,7 @@ export function CRMView() {
           <div className="flex gap-4 h-full pb-4 overflow-x-auto snap-x snap-mandatory pr-4">
             {currentFunnelInfo?.stages?.map((stage: any) => {
               const stageLeads = currentLeads.filter(l => l.stageId === stage.stageId);
+              const sortedLeads = getSortedStageLeads(stage.stageId, stageLeads);
               return (
                 <div 
                   key={stage.stageId} 
@@ -359,20 +514,54 @@ export function CRMView() {
                 >
                   <div className="p-4 border-b border-gray-200/50 flex justify-between items-center">
                     <h3 className="text-xs font-bold text-gray-500 uppercase tracking-widest">{stage.name}</h3>
-                    <span className="text-[10px] bg-white border border-gray-200 text-gray-600 px-2 py-1 rounded-full font-bold shadow-sm">{stageLeads.length}</span>
+                    <span className="text-[10px] bg-white border border-gray-200 text-gray-600 px-2 py-1 rounded-full font-bold shadow-sm">{sortedLeads.length}</span>
                   </div>
                   <div className="p-2 flex-1 overflow-y-auto space-y-2">
-                    {stageLeads.map(lead => (
+                    {sortedLeads.map((lead, index) => (
                       <div 
                         key={lead.id} 
                         draggable
                         onDragStart={(e) => {
                           e.dataTransfer.setData('text/plain', `lead-${lead.id}`);
                         }}
+                        onDragOver={(e) => {
+                          e.preventDefault();
+                        }}
+                        onDrop={async (e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          const rawDraggedId = e.dataTransfer.getData('text/plain');
+                          if (rawDraggedId && rawDraggedId.startsWith('lead-')) {
+                            const draggedLeadId = rawDraggedId.replace('lead-', '');
+                            await handleDropOnLead(draggedLeadId, lead.id, stage.stageId, stageLeads);
+                          }
+                        }}
                         onClick={() => { setSelectedLead(lead); setEditLeadData({ name: lead.name, value: lead.value }); }} 
-                        className={`bg-white p-4 rounded-xl shadow-sm cursor-pointer hover:shadow-md transition-all active:scale-95 border-2 ${lead.status === 1 ? 'border-green-400 bg-green-50/10' : (lead.status === 2 || lead.status === -1 ? 'border-red-200 opacity-60' : 'border-gray-200 hover:border-blue-400')}`}
+                        className={`bg-white p-4 rounded-xl shadow-sm cursor-pointer hover:shadow-md transition-all active:scale-95 border-2 relative group ${lead.status === 1 ? 'border-green-400 bg-green-50/10' : (lead.status === 2 || lead.status === -1 ? 'border-red-200 opacity-60' : 'border-gray-200 hover:border-blue-400')}`}
                       >
-                        <h4 className="text-sm font-semibold text-gray-800 leading-tight mb-3">{lead.name || lead.contactName || '(Sin nombre)'}</h4>
+                        <div className="flex justify-between items-start gap-2 mb-2">
+                          <h4 className="text-sm font-semibold text-gray-800 leading-tight truncate flex-1">{lead.name || lead.contactName || '(Sin nombre)'}</h4>
+                          <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity" onClick={(e) => e.stopPropagation()}>
+                            <button
+                              type="button"
+                              disabled={index === 0}
+                              onClick={() => moveLeadInStage(lead.id, stage.stageId, 'up', stageLeads)}
+                              className="p-1 rounded bg-gray-50 hover:bg-gray-150 text-gray-500 hover:text-gray-800 transition-colors disabled:opacity-20 disabled:hover:bg-gray-50 cursor-pointer"
+                              title="Subir interés"
+                            >
+                              <ChevronUp size={13} />
+                            </button>
+                            <button
+                              type="button"
+                              disabled={index === sortedLeads.length - 1}
+                              onClick={() => moveLeadInStage(lead.id, stage.stageId, 'down', stageLeads)}
+                              className="p-1 rounded bg-gray-50 hover:bg-gray-150 text-gray-500 hover:text-gray-800 transition-colors disabled:opacity-20 disabled:hover:bg-gray-50 cursor-pointer"
+                              title="Bajar interés"
+                            >
+                              <ChevronDown size={13} />
+                            </button>
+                          </div>
+                        </div>
                         <div className="flex justify-between items-end">
                           <span className="text-xs font-bold text-green-700 bg-green-50 px-2 py-1 rounded-lg">
                             {lead.value > 0 ? `€${lead.value}` : '-'}
@@ -381,7 +570,7 @@ export function CRMView() {
                         </div>
                       </div>
                     ))}
-                    {stageLeads.length === 0 && (
+                    {sortedLeads.length === 0 && (
                       <div className="h-24 border-2 border-dashed border-gray-200/60 rounded-xl flex items-center justify-center text-gray-400 text-xs font-medium">
                         Sin oportunidades
                       </div>

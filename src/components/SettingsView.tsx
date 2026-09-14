@@ -51,27 +51,37 @@ export function SettingsView() {
       const employeesList = Array.isArray(data) ? data : (data.employees || []);
       setEmployees(employeesList);
       if (employeesList.length === 0) {
-        setErrorMsg('No se recuperaron empleados de Holded. Esto suele ocurrir si el Token API es incorrecto.');
+        setErrorMsg('No se recuperaron empleados de Holded. Esto suele ocurrir si el Token API no tiene los permisos necesarios en Holded.');
       }
     } catch (e: any) {
-      console.error("Error loading employees", e);
-      setErrorMsg('Error de conexión con Holded. Por favor, revisa tu Token API.');
+      console.warn("Error loading employees", e);
+      const msg = e?.message || '';
+      if (msg.includes('403') || msg.includes('denegado') || msg.includes('Forbidden')) {
+        setErrorMsg('Error 403 (Acceso denegado): El Token API introducido no tiene permisos para consultar el directorio de empleados o es un token truncado/incompleto.');
+      } else {
+        setErrorMsg(`Error de conexión con Holded (${msg}). Por favor, revisa tu Token API.`);
+      }
     } finally {
       setLoading(false);
     }
   };
 
   const handleSaveApiKey = async () => {
-    if (!apiKeyInput.trim()) return;
+    const trimmed = apiKeyInput.trim();
+    if (!trimmed) return;
+    if (trimmed.startsWith('pat_') && (trimmed.endsWith('_') || trimmed.length < 50)) {
+      setErrorMsg('El token Personal Access Token parece incompleto (termina en "_" o le faltan caracteres del secreto). El formato de Holded es pat_<id>_<secreto>.');
+      return;
+    }
     setLoading(true);
     setErrorMsg('');
     try {
-      await setHoldedApiKey(apiKeyInput.trim());
+      await setHoldedApiKey(trimmed);
       setKeySavedMessage(true);
       setTimeout(() => setKeySavedMessage(false), 3000);
-      await loadEmployees(apiKeyInput.trim());
-    } catch (e) {
-      setErrorMsg('Error al guardar el Token API.');
+      await loadEmployees(trimmed);
+    } catch (e: any) {
+      setErrorMsg(e?.message || 'Error al guardar el Token API.');
     } finally {
       setLoading(false);
     }
@@ -227,8 +237,15 @@ export function SettingsView() {
               </div>
 
               {errorMsg && (
-                <div className="p-3 bg-red-50 text-red-700 text-sm rounded-md border border-red-200">
-                  {errorMsg}
+                <div className="p-3 bg-red-50 text-red-700 text-xs rounded-md border border-red-200 space-y-2">
+                  <p>{errorMsg}</p>
+                  <button
+                    type="button"
+                    onClick={handleResetApiKey}
+                    className="text-xs font-semibold text-blue-700 hover:text-blue-900 underline flex items-center gap-1.5 pt-1"
+                  >
+                    <RefreshCw size={12} /> Restablecer al Token API funcional por defecto
+                  </button>
                 </div>
               )}
 

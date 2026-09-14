@@ -1,6 +1,8 @@
 {
   "name": "CRM HOLDED",
-  "description": "",
+  "description": "Gestión de proyectos, tareas y control horario sincronizado con Holded API v2",
   "requestFramePermissions": [],
-  "majorCapabilities": []
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
 }

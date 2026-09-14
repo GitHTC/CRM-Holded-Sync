@@ -2,9 +2,10 @@ import React, { useState, useEffect } from 'react';
 import { crmService, contactsService } from '../services/holded';
 import { useAppContext } from '../context/AppContext';
 import { Spinner } from './Spinner';
+import { ContactsDirectoryModal } from './ContactsDirectoryModal';
 import { format } from 'date-fns';
 import { es } from 'date-fns/locale';
-import { LayoutGrid, List, Plus, Trash2, Edit2, ChevronDown, ChevronUp, Check, X, Search, User as UserIcon, Phone, Users, Mail, Plane, Utensils, FileText, StickyNote, Clock, Calendar, TrendingUp, Target } from 'lucide-react';
+import { LayoutGrid, List, Plus, Trash2, Edit2, ChevronDown, ChevronUp, Check, X, Search, User as UserIcon, Phone, Users, Mail, Plane, Utensils, FileText, StickyNote, Clock, Calendar, TrendingUp, Target, RefreshCw, Globe, MapPin, Briefcase } from 'lucide-react';
 import { cn } from '../lib/utils';
 
 const ACTIVITY_TYPES = [
@@ -33,14 +34,26 @@ export function CRMView() {
   const [newLead, setNewLead] = useState({ name: '', value: '', contactId: '', contactName: '' });
   const [contactSearch, setContactSearch] = useState('');
   const [showContactDropdown, setShowContactDropdown] = useState(false);
+  const [searchedContacts, setSearchedContacts] = useState<any[]>([]);
+  const [isSearchingContacts, setIsSearchingContacts] = useState(false);
+  const [isContactsDirectoryOpen, setIsContactsDirectoryOpen] = useState(false);
+
   const [isCreatingContact, setIsCreatingContact] = useState(false);
   const [newContact, setNewContact] = useState({ 
     name: '', 
+    trade_name: '',
     email: '', 
     phone: '', 
+    mobile: '',
     code: '', 
+    vat_number: '',
+    website: '',
     isperson: true,
-    type: 'client' 
+    type: 'client',
+    address: '',
+    city: '',
+    postal_code: '',
+    province: ''
   });
 
   const [selectedLead, setSelectedLead] = useState<any>(null);
@@ -49,6 +62,36 @@ export function CRMView() {
   const [statusUpdating, setStatusUpdating] = useState<number | null>(null);
 
   const [stagesOrder, setStagesOrder] = useState<Record<string, string[]>>({});
+
+  useEffect(() => {
+    if (!holdedApiKey) return;
+    const query = contactSearch.trim();
+    if (!query) {
+      setSearchedContacts(contacts.slice(0, 20));
+      return;
+    }
+
+    const timer = setTimeout(async () => {
+      setIsSearchingContacts(true);
+      try {
+        const results = await contactsService.searchContacts(holdedApiKey, { name: query, limit: 30 });
+        setSearchedContacts(results);
+      } catch (err) {
+        console.warn('Fallback to local contacts search', err);
+        const filtered = contacts.filter(c => 
+          c.name?.toLowerCase().includes(query.toLowerCase()) || 
+          c.tradeName?.toLowerCase().includes(query.toLowerCase()) ||
+          c.email?.toLowerCase().includes(query.toLowerCase()) ||
+          c.code?.toLowerCase().includes(query.toLowerCase())
+        );
+        setSearchedContacts(filtered);
+      } finally {
+        setIsSearchingContacts(false);
+      }
+    }, 200);
+
+    return () => clearTimeout(timer);
+  }, [contactSearch, holdedApiKey, contacts]);
 
   useEffect(() => {
     try {
@@ -284,27 +327,46 @@ export function CRMView() {
 
   const handleCreateContact = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!holdedApiKey) return;
+    if (!holdedApiKey || !newContact.name.trim()) return;
     try {
-      const payload = {
-        name: newContact.name,
-        email: newContact.email || undefined,
-        phone: newContact.phone || undefined,
-        code: newContact.code || undefined,
-        isperson: newContact.isperson,
+      const payload: any = {
+        name: newContact.name.trim(),
+        is_person: newContact.isperson,
         type: newContact.type
       };
+      if (newContact.trade_name.trim()) payload.trade_name = newContact.trade_name.trim();
+      if (newContact.email.trim()) payload.email = newContact.email.trim();
+      if (newContact.phone.trim()) payload.phone = newContact.phone.trim();
+      if (newContact.mobile.trim()) payload.mobile = newContact.mobile.trim();
+      if (newContact.code.trim()) payload.code = newContact.code.trim();
+      if (newContact.vat_number.trim()) payload.vat_number = newContact.vat_number.trim();
+      if (newContact.website.trim()) payload.website = newContact.website.trim();
+
+      if (newContact.address || newContact.city || newContact.postal_code || newContact.province) {
+        payload.bill_address = {
+          address: newContact.address.trim() || null,
+          city: newContact.city.trim() || null,
+          postal_code: newContact.postal_code.trim() || null,
+          province: newContact.province.trim() || null
+        };
+      }
+
       const res = await contactsService.createContact(holdedApiKey, payload);
       if (res && res.id) {
         const createdContact = { 
           id: res.id, 
           name: newContact.name, 
+          tradeName: newContact.trade_name,
           email: newContact.email,
           phone: newContact.phone,
+          mobile: newContact.mobile,
           code: newContact.code,
-          isperson: newContact.isperson
+          isperson: newContact.isperson,
+          isPerson: newContact.isperson,
+          type: newContact.type
         };
         setContacts(prev => [createdContact, ...prev]);
+        setSearchedContacts(prev => [createdContact, ...prev]);
         setNewLead(prev => ({ ...prev, contactId: res.id, contactName: newContact.name }));
         setContactSearch(newContact.name);
         setIsCreatingContact(false);
@@ -376,9 +438,9 @@ export function CRMView() {
   if (loading && leads.length === 0) return <Spinner />;
 
   return (
-    <div className="p-4 space-y-4 h-full flex flex-col bg-gray-50/50">
-      <div className="flex justify-between items-center bg-white p-3 rounded-lg border border-gray-200 shadow-sm relative z-10">
-        <div className="flex-1 max-w-[240px]">
+    <div className="p-4 pb-1 space-y-3 h-full flex flex-col bg-gray-50/50">
+      <div className="flex justify-between items-center bg-white p-3 rounded-lg border border-gray-200 shadow-sm relative z-10 gap-2 flex-wrap">
+        <div className="flex-1 min-w-[180px] max-w-[240px]">
           <select 
             value={selectedFunnel}
             onChange={e => setSelectedFunnel(e.target.value)}
@@ -390,7 +452,18 @@ export function CRMView() {
           </select>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          {/* Button Direct Contacts Directory v2 */}
+          <button
+            type="button"
+            onClick={() => setIsContactsDirectoryOpen(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded-md border border-blue-200 text-xs font-semibold transition-colors"
+            title="Búsqueda y Directorio de Contactos (Holded v2)"
+          >
+            <Users size={14} />
+            <span className="hidden sm:inline">Contactos (v2)</span>
+          </button>
+
           {/* Status Filter */}
           <div className="flex items-center gap-1.5 bg-gray-100 p-1 rounded-md border border-gray-200/50">
             <span className="text-[10px] font-bold text-gray-400 uppercase px-1.5">Filtro:</span>
@@ -471,7 +544,7 @@ export function CRMView() {
         </div>
       </div>
 
-      <div className="flex-1 overflow-auto -mx-4 px-4 pb-20">
+      <div className="flex-1 overflow-auto -mx-4 px-4 pb-1">
         {viewMode === 'list' ? (
           <div className="space-y-2">
             {currentLeads.map(lead => {
@@ -495,7 +568,7 @@ export function CRMView() {
             })}
           </div>
         ) : (
-          <div className="flex gap-4 h-full pb-4 overflow-x-auto snap-x snap-mandatory pr-4">
+          <div className="flex gap-4 h-full pb-1 overflow-x-auto snap-x snap-mandatory pr-4">
             {currentFunnelInfo?.stages?.map((stage: any) => {
               const stageLeads = currentLeads.filter(l => l.stageId === stage.stageId);
               const sortedLeads = getSortedStageLeads(stage.stageId, stageLeads);
@@ -585,24 +658,28 @@ export function CRMView() {
 
       <button 
         onClick={() => setIsCreating(true)}
-        className="fixed bottom-20 right-4 w-14 h-14 bg-blue-600 text-white rounded-full flex items-center justify-center shadow-xl hover:bg-blue-700 hover:scale-110 transition-all z-30"
+        className="fixed bottom-14 right-4 w-12 h-12 bg-blue-600 text-white rounded-full flex items-center justify-center shadow-lg hover:bg-blue-700 hover:scale-105 transition-all z-30"
+        title="Nueva oportunidad"
       >
-        <Plus size={28} />
+        <Plus size={24} />
       </button>
 
-      {/* MODAL CREAR LEAD (SIMPLIFICADO) */}
+      {/* MODAL CREAR LEAD CON BÚSQUEDA V2 DE CONTACTOS */}
       {isCreating && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-xs z-50 flex items-center justify-center p-4">
           <div className="bg-white w-full max-w-md rounded-2xl shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200">
              <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-gray-50/50">
-               <h3 className="font-bold text-gray-800">Nueva oportunidad</h3>
+               <div>
+                 <h3 className="font-bold text-gray-800 text-base">Nueva oportunidad</h3>
+                 <p className="text-xs text-gray-400">Asocia un contacto verificado con Holded API v2</p>
+               </div>
                <button onClick={() => setIsCreating(false)} className="text-gray-400 hover:text-gray-600 p-1 rounded-full hover:bg-gray-200">
                  <X size={20} />
                </button>
              </div>
              <form onSubmit={handleCreateLead} className="p-6 space-y-4">
                <div>
-                 <label className="block text-[11px] font-bold text-gray-400 uppercase tracking-wider mb-1.5">Nombre oportunidad</label>
+                 <label className="block text-[11px] font-bold text-gray-400 uppercase tracking-wider mb-1.5">Nombre oportunidad *</label>
                  <input 
                    type="text" required autoFocus
                    value={newLead.name} onChange={e => setNewLead({...newLead, name: e.target.value})}
@@ -611,64 +688,106 @@ export function CRMView() {
                  />
                </div>
                <div className="relative">
-                 <label className="block text-[11px] font-bold text-gray-400 uppercase tracking-wider mb-1.5">Contacto</label>
+                 <div className="flex justify-between items-center mb-1.5">
+                   <label className="block text-[11px] font-bold text-gray-400 uppercase tracking-wider">Contacto (Holded v2) *</label>
+                   <button
+                     type="button"
+                     onClick={() => setIsContactsDirectoryOpen(true)}
+                     className="text-[11px] text-blue-600 hover:underline font-semibold flex items-center gap-1"
+                   >
+                     <Users size={12} /> Directorio completo
+                   </button>
+                 </div>
                  <div className="relative">
                    <input 
                      type="text" required
                      value={contactSearch}
                      onChange={e => { setContactSearch(e.target.value); setShowContactDropdown(true); }}
                      onFocus={() => setShowContactDropdown(true)}
-                     className="w-full border border-gray-200 rounded-xl pl-10 pr-4 py-3 text-sm focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all"
-                     placeholder="Buscar contacto..."
+                     className="w-full border border-gray-200 rounded-xl pl-10 pr-10 py-3 text-sm focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all"
+                     placeholder="Buscar o escribir nombre de contacto..."
                    />
                    <Search className="absolute left-3.5 top-3.5 text-gray-400" size={16} />
+                   {isSearchingContacts && (
+                     <RefreshCw className="absolute right-3.5 top-3.5 text-blue-600 animate-spin" size={16} />
+                   )}
                  </div>
-                 {showContactDropdown && contactSearch && (
-                    <div className="absolute z-50 w-full mt-2 bg-white rounded-xl shadow-2xl border border-gray-100 max-h-48 overflow-y-auto">
-                        {filteredContacts.length === 0 ? (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setNewContact({
-                                name: contactSearch,
-                                email: '',
-                                phone: '',
-                                code: '',
-                                isperson: true,
-                                type: 'client'
-                              });
-                              setIsCreatingContact(true);
-                              setShowContactDropdown(false);
-                            }}
-                            className="w-full text-left px-4 py-3 text-sm text-[#1a73e8] hover:bg-blue-50/50 font-semibold flex items-center gap-2"
-                          >
-                            <Plus size={16} /> Crear nuevo contacto "{contactSearch}"
-                          </button>
-                        ) : (
-                          <>
-                            {filteredContacts.map(c => (
-                              <div key={c.id} onClick={() => { setNewLead({...newLead, contactId: c.id, contactName: c.name}); setContactSearch(c.name); setShowContactDropdown(false); }} className="px-4 py-3 text-sm hover:bg-blue-50 cursor-pointer border-b border-gray-50 flex justify-between">
-                                <span className="font-semibold text-gray-700">{c.name}</span>
-                                <span className="text-[10px] text-gray-400">{c.email}</span>
-                              </div>
-                            ))}
+
+                 {showContactDropdown && (
+                    <div className="absolute z-50 w-full mt-2 bg-white rounded-xl shadow-2xl border border-gray-100 max-h-52 overflow-y-auto divide-y divide-gray-50">
+                        {isSearchingContacts && (
+                          <div className="p-3 text-xs text-blue-600 flex items-center justify-center gap-2 bg-blue-50/50">
+                            <RefreshCw size={14} className="animate-spin" /> Buscando en Holded v2...
+                          </div>
+                        )}
+
+                        {searchedContacts.length === 0 && !isSearchingContacts ? (
+                          <div className="p-3 text-center">
+                            <p className="text-xs text-gray-400 mb-2">No se encontró ningún contacto</p>
                             <button
                               type="button"
                               onClick={() => {
-                                setNewContact({
+                                setNewContact(prev => ({
+                                  ...prev,
                                   name: contactSearch,
-                                  email: '',
-                                  phone: '',
-                                  code: '',
-                                  isperson: true,
-                                  type: 'client'
-                                });
+                                }));
                                 setIsCreatingContact(true);
                                 setShowContactDropdown(false);
                               }}
-                              className="w-full text-left px-4 py-3 text-sm text-[#1a73e8] hover:bg-blue-50/50 font-semibold border-t border-gray-100 flex items-center gap-1.5"
+                              className="w-full text-center px-3 py-2 text-xs bg-blue-50 text-blue-700 rounded-lg hover:bg-blue-100 font-semibold flex items-center justify-center gap-1.5"
                             >
-                              <Plus size={16} /> Crear nuevo contacto...
+                              <Plus size={14} /> Crear "{contactSearch || 'nuevo contacto'}" en Holded
+                            </button>
+                          </div>
+                        ) : (
+                          <>
+                            {searchedContacts.map(c => {
+                              const isSelected = newLead.contactId === c.id;
+                              return (
+                                <div 
+                                  key={c.id} 
+                                  onClick={() => { 
+                                    setNewLead({...newLead, contactId: c.id, contactName: c.name}); 
+                                    setContactSearch(c.name); 
+                                    setShowContactDropdown(false); 
+                                  }} 
+                                  className={cn(
+                                    "px-3.5 py-2.5 text-xs hover:bg-blue-50/80 cursor-pointer flex justify-between items-center transition-colors",
+                                    isSelected ? "bg-blue-50 font-bold" : ""
+                                  )}
+                                >
+                                  <div className="min-w-0 flex-1 pr-2">
+                                    <div className="flex items-center gap-1.5 flex-wrap">
+                                      <span className="font-semibold text-gray-800 truncate">{c.name}</span>
+                                      {c.tradeName && c.tradeName !== c.name && (
+                                        <span className="text-[10px] text-gray-400">({c.tradeName})</span>
+                                      )}
+                                      <span className="text-[9px] bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded font-mono">
+                                        {c.isPerson ?? c.is_person ? 'Persona' : 'Empresa'}
+                                      </span>
+                                    </div>
+                                    <div className="text-[11px] text-gray-400 mt-0.5 flex gap-2">
+                                      {c.email && <span className="truncate">{c.email}</span>}
+                                      {c.code && <span className="font-mono">{c.code}</span>}
+                                    </div>
+                                  </div>
+                                  {isSelected && <Check size={14} className="text-blue-600 shrink-0" />}
+                                </div>
+                              );
+                            })}
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setNewContact(prev => ({
+                                  ...prev,
+                                  name: contactSearch,
+                                }));
+                                setIsCreatingContact(true);
+                                setShowContactDropdown(false);
+                              }}
+                              className="w-full text-left px-3.5 py-2.5 text-xs text-blue-600 hover:bg-blue-50 font-semibold flex items-center gap-1.5 bg-gray-50/50"
+                            >
+                              <Plus size={14} /> + Crear nuevo contacto en Holded...
                             </button>
                           </>
                         )}
@@ -679,135 +798,184 @@ export function CRMView() {
                   <label className="block text-[11px] font-bold text-gray-400 uppercase tracking-wider mb-1.5">Valor (€)</label>
                   <input 
                     type="number" step="0.01" value={newLead.value} onChange={e => setNewLead({...newLead, value: e.target.value})}
-                    className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:ring-2 focus:ring-blue-500/20"
+                    className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm focus:ring-2 focus:ring-blue-500/20 outline-none"
                     placeholder="0.00"
                   />
                </div>
-               <button type="submit" disabled={!newLead.contactId} className="w-full bg-blue-600 text-white py-4 rounded-xl font-bold text-sm shadow-lg hover:bg-blue-700 transition-all disabled:opacity-50">
-                 Crear Oportunidad
+               <button type="submit" disabled={!newLead.contactId} className="w-full bg-blue-600 text-white py-3.5 rounded-xl font-bold text-sm shadow-lg hover:bg-blue-700 transition-all disabled:opacity-50 flex items-center justify-center gap-2">
+                 <Check size={16} /> Crear Oportunidad
                </button>
              </form>
           </div>
         </div>
       )}
 
-      {/* MODAL CREAR CONTACTO */}
+      {/* MODAL CREAR CONTACTO V2 */}
       {isCreatingContact && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[70] flex items-center justify-center p-4">
-          <div className="bg-white w-full max-w-md rounded-2xl shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200">
-            <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-gray-50/50">
-              <h3 className="font-bold text-gray-800">Crear nuevo contacto</h3>
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-xs z-[70] flex items-center justify-center p-3 sm:p-4">
+          <div className="bg-white w-full max-w-lg rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh] animate-in zoom-in-95 duration-200">
+            <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-gray-50/80 shrink-0">
+              <div>
+                <h3 className="font-bold text-gray-800 text-base">Crear Contacto (Holded v2)</h3>
+                <p className="text-xs text-gray-400">Creación directa en la base de datos de Holded</p>
+              </div>
               <button 
                 type="button"
                 onClick={() => setIsCreatingContact(false)} 
-                className="text-gray-400 hover:text-gray-600 p-1 rounded-full hover:bg-gray-200"
+                className="text-gray-400 hover:text-gray-600 p-1.5 rounded-full hover:bg-gray-100"
               >
-                <X size={20} />
+                <X size={18} />
               </button>
             </div>
-            <form onSubmit={handleCreateContact} className="p-6 space-y-4">
+            <form onSubmit={handleCreateContact} className="p-6 overflow-y-auto space-y-4">
               {/* Tipo de Contacto (Persona / Empresa) */}
               <div>
                 <label className="block text-[11px] font-bold text-gray-400 uppercase tracking-wider mb-2">
-                  Tipo de Contacto
+                  Tipo de Persona Jurídica
                 </label>
                 <div className="grid grid-cols-2 gap-3">
                   <button
                     type="button"
                     onClick={() => setNewContact({ ...newContact, isperson: true })}
                     className={cn(
-                      'py-2.5 px-4 rounded-xl border text-sm font-semibold flex items-center justify-center gap-2 transition-all',
+                      'py-2.5 px-4 rounded-xl border text-xs font-bold flex items-center justify-center gap-2 transition-all',
                       newContact.isperson
-                        ? 'border-[#1a73e8] bg-blue-50 text-[#1a73e8]'
+                        ? 'border-blue-600 bg-blue-50 text-blue-700'
                         : 'border-gray-200 hover:bg-gray-50 text-gray-600'
                     )}
                   >
-                    <UserIcon size={16} /> Persona
+                    <UserIcon size={16} /> Persona física
                   </button>
                   <button
                     type="button"
                     onClick={() => setNewContact({ ...newContact, isperson: false })}
                     className={cn(
-                      'py-2.5 px-4 rounded-xl border text-sm font-semibold flex items-center justify-center gap-2 transition-all',
+                      'py-2.5 px-4 rounded-xl border text-xs font-bold flex items-center justify-center gap-2 transition-all',
                       !newContact.isperson
-                        ? 'border-[#1a73e8] bg-blue-50 text-[#1a73e8]'
+                        ? 'border-blue-600 bg-blue-50 text-blue-700'
                         : 'border-gray-200 hover:bg-gray-50 text-gray-600'
                     )}
                   >
-                    <Users size={16} /> Empresa
+                    <Users size={16} /> Empresa / Sociedad
                   </button>
                 </div>
               </div>
 
-              {/* Nombre */}
+              {/* Tipo / Clasificación */}
               <div>
                 <label className="block text-[11px] font-bold text-gray-400 uppercase tracking-wider mb-1.5">
-                  {newContact.isperson ? 'Nombre completo' : 'Nombre de Empresa / Razón Social'}
+                  Tipo de Contacto (Holded)
                 </label>
-                <input
-                  type="text"
-                  required
-                  value={newContact.name}
-                  onChange={(e) => setNewContact({ ...newContact, name: e.target.value })}
-                  className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all"
-                  placeholder={newContact.isperson ? "Nombre y apellidos" : "Nombre de la empresa S.L."}
-                />
+                <select
+                  value={newContact.type}
+                  onChange={(e) => setNewContact({ ...newContact, type: e.target.value })}
+                  className="w-full border border-gray-200 rounded-xl px-3.5 py-2.5 text-xs font-semibold text-gray-700 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none bg-white"
+                >
+                  <option value="client">Cliente (client)</option>
+                  <option value="lead">Lead / Prospecto (lead)</option>
+                  <option value="supplier">Proveedor (supplier)</option>
+                  <option value="creditor">Acreedor (creditor)</option>
+                  <option value="debtor">Deudor (debtor)</option>
+                </select>
               </div>
 
-              {/* Email */}
-              <div>
-                <label className="block text-[11px] font-bold text-gray-400 uppercase tracking-wider mb-1.5">
-                  Correo electrónico
-                </label>
-                <input
-                  type="email"
-                  value={newContact.email}
-                  onChange={(e) => setNewContact({ ...newContact, email: e.target.value })}
-                  className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all"
-                  placeholder="ejemplo@correo.com"
-                />
+              {/* Nombre y Nombre Comercial */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[11px] font-bold text-gray-400 uppercase tracking-wider mb-1.5">
+                    {newContact.isperson ? 'Nombre completo *' : 'Razón Social *'}
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={newContact.name}
+                    onChange={(e) => setNewContact({ ...newContact, name: e.target.value })}
+                    className="w-full border border-gray-200 rounded-xl px-3.5 py-2.5 text-xs text-gray-800 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none"
+                    placeholder={newContact.isperson ? "Nombre y apellidos" : "Nombre de la empresa S.L."}
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-bold text-gray-400 uppercase tracking-wider mb-1.5">
+                    Nombre comercial
+                  </label>
+                  <input
+                    type="text"
+                    value={newContact.trade_name}
+                    onChange={(e) => setNewContact({ ...newContact, trade_name: e.target.value })}
+                    className="w-full border border-gray-200 rounded-xl px-3.5 py-2.5 text-xs text-gray-800 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none"
+                    placeholder="Marca comercial o fantasía"
+                  />
+                </div>
               </div>
 
-              {/* Teléfono */}
-              <div>
-                <label className="block text-[11px] font-bold text-gray-400 uppercase tracking-wider mb-1.5">
-                  Teléfono
-                </label>
-                <input
-                  type="tel"
-                  value={newContact.phone}
-                  onChange={(e) => setNewContact({ ...newContact, phone: e.target.value })}
-                  className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all"
-                  placeholder="+34 600 000 000"
-                />
+              {/* CIF / NIF y Email */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[11px] font-bold text-gray-400 uppercase tracking-wider mb-1.5">
+                    NIF / CIF
+                  </label>
+                  <input
+                    type="text"
+                    value={newContact.code}
+                    onChange={(e) => setNewContact({ ...newContact, code: e.target.value })}
+                    className="w-full border border-gray-200 rounded-xl px-3.5 py-2.5 text-xs uppercase text-gray-800 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none"
+                    placeholder="Ej. B12345678 o 12345678Z"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-bold text-gray-400 uppercase tracking-wider mb-1.5">
+                    Email principal
+                  </label>
+                  <input
+                    type="email"
+                    value={newContact.email}
+                    onChange={(e) => setNewContact({ ...newContact, email: e.target.value })}
+                    className="w-full border border-gray-200 rounded-xl px-3.5 py-2.5 text-xs text-gray-800 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none"
+                    placeholder="contacto@empresa.com"
+                  />
+                </div>
               </div>
 
-              {/* CIF / NIF */}
-              <div>
-                <label className="block text-[11px] font-bold text-gray-400 uppercase tracking-wider mb-1.5">
-                  CIF / NIF
-                </label>
-                <input
-                  type="text"
-                  value={newContact.code}
-                  onChange={(e) => setNewContact({ ...newContact, code: e.target.value })}
-                  className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all uppercase"
-                  placeholder="Ej. B12345678 o 12345678Z"
-                />
+              {/* Teléfonos */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[11px] font-bold text-gray-400 uppercase tracking-wider mb-1.5">
+                    Móvil
+                  </label>
+                  <input
+                    type="tel"
+                    value={newContact.mobile}
+                    onChange={(e) => setNewContact({ ...newContact, mobile: e.target.value })}
+                    className="w-full border border-gray-200 rounded-xl px-3.5 py-2.5 text-xs text-gray-800 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none"
+                    placeholder="612345678"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-bold text-gray-400 uppercase tracking-wider mb-1.5">
+                    Teléfono fijo
+                  </label>
+                  <input
+                    type="tel"
+                    value={newContact.phone}
+                    onChange={(e) => setNewContact({ ...newContact, phone: e.target.value })}
+                    className="w-full border border-gray-200 rounded-xl px-3.5 py-2.5 text-xs text-gray-800 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none"
+                    placeholder="912345678"
+                  />
+                </div>
               </div>
 
-              <div className="pt-3 flex gap-3">
+              <div className="pt-3 flex gap-3 border-t border-gray-100">
                 <button
                   type="submit"
-                  disabled={!newContact.name}
-                  className="flex-1 bg-blue-600 text-white py-3.5 rounded-xl font-bold text-sm shadow-lg hover:bg-blue-700 transition-all disabled:opacity-50"
+                  disabled={!newContact.name.trim()}
+                  className="flex-1 bg-blue-600 text-white py-3 rounded-xl font-bold text-xs shadow-md hover:bg-blue-700 transition-all disabled:opacity-50 flex items-center justify-center gap-1.5"
                 >
-                  Guardar Contacto
+                  <Check size={14} /> Guardar Contacto en Holded
                 </button>
                 <button
                   type="button"
                   onClick={() => setIsCreatingContact(false)}
-                  className="px-6 bg-white border border-gray-200 text-gray-500 py-3.5 rounded-xl font-bold text-sm hover:bg-gray-50"
+                  className="px-5 bg-white border border-gray-200 text-gray-600 py-3 rounded-xl font-bold text-xs hover:bg-gray-50"
                 >
                   Cancelar
                 </button>
@@ -1027,6 +1195,24 @@ export function CRMView() {
           </div>
         </div>
       )}
+      {/* MODAL DIRECTORIO COMPLETO DE CONTACTOS (HOLDED V2 SEARCH) */}
+      <ContactsDirectoryModal
+        isOpen={isContactsDirectoryOpen}
+        onClose={() => setIsContactsDirectoryOpen(false)}
+        onSelectContactForLead={(contact) => {
+          setNewLead(prev => ({
+            ...prev,
+            contactId: contact.id,
+            contactName: contact.name
+          }));
+          setContactSearch(contact.name);
+          setIsCreating(true);
+        }}
+        onContactCreated={(contact) => {
+          setContacts(prev => [contact, ...prev]);
+          setSearchedContacts(prev => [contact, ...prev]);
+        }}
+      />
     </div>
   );
 }

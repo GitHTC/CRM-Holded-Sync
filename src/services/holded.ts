@@ -2,10 +2,10 @@ const chromeObj = typeof window !== 'undefined' ? (window as any).chrome : undef
 const isExtension = chromeObj && chromeObj.runtime && chromeObj.runtime.id;
 const BASE_URL = isExtension ? 'https://api.holded.com/api' : '/api/holded';
 
-export const HOLDED_CRM_API_URL = `${BASE_URL}/crm/v1`;
-export const HOLDED_PROJECTS_API_URL = `${BASE_URL}/projects/v1`;
-export const HOLDED_TEAM_API_URL = `${BASE_URL}/team/v1`;
-export const HOLDED_INVOICING_API_URL = `${BASE_URL}/invoicing/v1`;
+export const HOLDED_CRM_API_URL = `${BASE_URL}/v2`;
+export const HOLDED_PROJECTS_API_URL = `${BASE_URL}/v2`;
+export const HOLDED_TEAM_API_URL = `${BASE_URL}/v2`;
+export const HOLDED_INVOICING_API_URL = `${BASE_URL}/v2`;
 
 // --- HOLDED API V2 MAPPERS ---
 
@@ -86,31 +86,44 @@ function mapContactToV1(contact: any): any {
 
 function mapContactToV2Payload(contact: any): any {
   if (!contact) return contact;
-  const payload = { ...contact };
-  if (contact.customId) {
-    payload.custom_id = contact.customId;
-    delete payload.customId;
+  const payload: any = {
+    name: contact.name?.trim()
+  };
+  
+  if (contact.code && contact.code.trim()) payload.code = contact.code.trim();
+  if ((contact.vat_number || contact.vatNumber) && (contact.vat_number || contact.vatNumber).trim()) {
+    payload.vat_number = (contact.vat_number || contact.vatNumber).trim();
   }
-  if (contact.vatNumber) {
-    payload.vat_number = contact.vatNumber;
-    delete payload.vatNumber;
+  if ((contact.trade_name || contact.tradeName) && (contact.trade_name || contact.tradeName).trim()) {
+    payload.trade_name = (contact.trade_name || contact.tradeName).trim();
   }
-  if (contact.tradeName) {
-    payload.trade_name = contact.tradeName;
-    delete payload.tradeName;
+  if (contact.is_person !== undefined) {
+    payload.is_person = Boolean(contact.is_person);
+  } else if (contact.isperson !== undefined) {
+    payload.is_person = Boolean(contact.isperson);
+  } else if (contact.isPerson !== undefined) {
+    payload.is_person = Boolean(contact.isPerson);
   }
-  if (contact.isPerson !== undefined) {
-    payload.is_person = contact.isPerson;
-    delete payload.isPerson;
+  
+  if (contact.email && contact.email.trim()) payload.email = contact.email.trim();
+  if (contact.phone && contact.phone.trim()) payload.phone = contact.phone.trim();
+  if (contact.mobile && contact.mobile.trim()) payload.mobile = contact.mobile.trim();
+  if (contact.website && contact.website.trim()) payload.website = contact.website.trim();
+  if (contact.type) payload.type = contact.type;
+
+  const addr = contact.bill_address || contact.billAddress;
+  if (addr && (addr.address || addr.city || addr.postal_code || addr.postalCode || addr.province || addr.country)) {
+    payload.bill_address = {
+      address: addr.address || null,
+      city: addr.city || null,
+      postal_code: addr.postal_code || addr.postalCode || null,
+      province: addr.province || null,
+      country: addr.country || null,
+      country_code: addr.country_code || addr.countryCode || null,
+      info: addr.info || null
+    };
   }
-  if (contact.isperson !== undefined) {
-    payload.is_person = contact.isperson;
-    delete payload.isperson;
-  }
-  if (contact.billAddress) {
-    payload.bill_address = contact.billAddress;
-    delete payload.billAddress;
-  }
+
   return payload;
 }
 
@@ -119,11 +132,17 @@ function mapProjectToV1(project: any): any {
   return {
     ...project,
     contactId: project.contact_id || project.contactId,
+    contactName: project.contact_name || project.contactName,
     startDate: project.start_date || project.startDate,
     dueDate: project.due_date || project.dueDate,
-    numberOfTasks: project.number_of_tasks || project.numberOfTasks,
-    completedTasks: project.completed_tasks || project.completedTasks,
-    allowNotifications: project.allow_notifications || project.allowNotifications
+    numberOfTasks: project.number_of_tasks !== undefined ? project.number_of_tasks : project.numberOfTasks,
+    completedTasks: project.completed_tasks !== undefined ? project.completed_tasks : project.completedTasks,
+    allowNotifications: project.allow_notifications || project.allowNotifications,
+    users: project.users || {},
+    tags: Array.isArray(project.tags) ? project.tags : [],
+    billable: Boolean(project.billable),
+    archived: Boolean(project.archived),
+    status: project.status !== undefined ? project.status : 0
   };
 }
 
@@ -137,6 +156,29 @@ function mapProjectToV2Payload(project: any): any {
   };
 }
 
+function mapProjectUpdateToV2Payload(project: any): any {
+  if (!project) return project;
+  const payload: any = {
+    name: project.name
+  };
+  if (project.description !== undefined) payload.description = project.description;
+  if (project.dueDate !== undefined || project.due_date !== undefined) {
+    payload.due_date = project.dueDate || project.due_date || null;
+  }
+  if (project.startDate !== undefined || project.start_date !== undefined) {
+    payload.start_date = project.startDate || project.start_date || null;
+  }
+  if (project.contactId !== undefined || project.contact_id !== undefined) {
+    payload.contact_id = project.contactId || project.contact_id || null;
+  }
+  if (project.status !== undefined) payload.status = Number(project.status);
+  if (project.billable !== undefined) payload.billable = Boolean(project.billable);
+  if (Array.isArray(project.tags)) payload.tags = project.tags;
+  if (project.allowNotifications !== undefined) payload.allow_notifications = project.allowNotifications;
+  if (Array.isArray(project.lists)) payload.lists = project.lists;
+  return payload;
+}
+
 function mapTaskToV1(task: any): any {
   if (!task) return task;
   return {
@@ -144,11 +186,14 @@ function mapTaskToV1(task: any): any {
     projectId: task.project_id || task.projectId,
     listId: task.list_id || task.listId,
     dueDate: task.due_date || task.dueDate,
-    assignedTo: task.assigned_to || task.assignedTo,
-    storyPoints: task.story_points || task.storyPoints,
     startDate: task.start_date || task.startDate,
+    assignedTo: Array.isArray(task.assigned_to) ? task.assigned_to : (task.assignedTo || []),
+    storyPoints: task.story_points !== undefined ? task.story_points : task.storyPoints,
     updatedAt: task.updated_at || task.updatedAt,
-    createdAt: task.created_at || task.createdAt
+    createdAt: task.created_at || task.createdAt,
+    priority: task.priority !== undefined ? Number(task.priority) : 0,
+    status: task.status || 'todo',
+    comments: Array.isArray(task.comments) ? task.comments : []
   };
 }
 
@@ -234,12 +279,19 @@ export async function fetchHolded(url: string, apiKey: string, options: RequestI
             resolve([]); // Return empty array on 404 for compatibility
             return;
           }
-          let errMsg = response.text;
+          let errMsg = response.text || '';
           try {
             const errJson = JSON.parse(response.text);
-            if (errJson.info) errMsg = errJson.info;
+            if (errJson.detail) errMsg = errJson.detail;
+            else if (errJson.info) errMsg = errJson.info;
             else if (errJson.message) errMsg = errJson.message;
+            else if (errJson.title) errMsg = errJson.title;
           } catch(e) {}
+          if (typeof errMsg === 'string' && (errMsg.includes('<html') || errMsg.includes('<!DOCTYPE'))) {
+            errMsg = response.status === 403 
+              ? 'Acceso denegado (403 Forbidden). El Token API no tiene permisos o es inválido.'
+              : `Error HTTP ${response.status}`;
+          }
           reject(new Error(`Holded API Error ${response.status}: ${errMsg || response.statusText}`));
           return;
         }
@@ -271,12 +323,19 @@ export async function fetchHolded(url: string, apiKey: string, options: RequestI
   if (!response.ok) {
     if (response.status === 404) return []; // Some Holded endpoints return 404 when empty
     const errText = await response.text();
-    let errMsg = errText;
+    let errMsg = errText || '';
     try {
       const errJson = JSON.parse(errText);
-      if (errJson.info) errMsg = errJson.info;
+      if (errJson.detail) errMsg = errJson.detail;
+      else if (errJson.info) errMsg = errJson.info;
       else if (errJson.message) errMsg = errJson.message;
+      else if (errJson.title) errMsg = errJson.title;
     } catch(e) {}
+    if (typeof errMsg === 'string' && (errMsg.includes('<html') || errMsg.includes('<!DOCTYPE'))) {
+      errMsg = response.status === 403 
+        ? 'Acceso denegado (403 Forbidden). El Token API no tiene permisos o es inválido.'
+        : `Error HTTP ${response.status}`;
+    }
     throw new Error(`Holded API Error ${response.status}: ${errMsg || response.statusText}`);
   }
 
@@ -313,10 +372,45 @@ export const teamService = {
 };
 
 export const contactsService = {
-  getContacts: async (apiKey: string) => {
-    const res = await fetchHolded(`${BASE_URL}/v2/contacts`, apiKey);
-    const items = res && res.items ? res.items : (Array.isArray(res) ? res : []);
-    return items.map(mapContactToV1);
+  getContacts: async (apiKey: string, params?: { 
+    phone?: string; 
+    mobile?: string; 
+    email?: string; 
+    code?: string; 
+    custom_id?: string; 
+    limit?: number; 
+    cursor?: string 
+  }) => {
+    let url = `${BASE_URL}/v2/contacts`;
+    if (params) {
+      const searchParams = new URLSearchParams();
+      if (params.phone) searchParams.set('phone', params.phone);
+      if (params.mobile) searchParams.set('mobile', params.mobile);
+      if (params.email) searchParams.set('email', params.email);
+      if (params.code) searchParams.set('code', params.code);
+      if (params.custom_id) searchParams.set('custom_id', params.custom_id);
+      if (params.limit) searchParams.set('limit', String(params.limit));
+      if (params.cursor) searchParams.set('cursor', params.cursor);
+      const queryStr = searchParams.toString();
+      if (queryStr) url += `?${queryStr}`;
+    }
+    const res = await fetchHolded(url, apiKey);
+    const rawItems = res && res.items ? res.items : (Array.isArray(res) ? res : []);
+    const items = rawItems.map(mapContactToV1);
+    (items as any).cursor = res?.cursor || null;
+    (items as any).hasMore = Boolean(res?.has_more);
+    return items;
+  },
+  searchContacts: async (apiKey: string, query: { name: string; limit?: number; cursor?: string }) => {
+    let url = `${BASE_URL}/v2/contacts/search?name=${encodeURIComponent(query.name)}`;
+    if (query.limit) url += `&limit=${query.limit}`;
+    if (query.cursor) url += `&cursor=${encodeURIComponent(query.cursor)}`;
+    const res = await fetchHolded(url, apiKey);
+    const rawItems = res && res.items ? res.items : (Array.isArray(res) ? res : []);
+    const items = rawItems.map(mapContactToV1);
+    (items as any).cursor = res?.cursor || null;
+    (items as any).hasMore = Boolean(res?.has_more);
+    return items;
   },
   createContact: async (apiKey: string, contact: any) => {
     return fetchHolded(`${BASE_URL}/v2/contacts`, apiKey, {
@@ -416,15 +510,44 @@ export const crmService = {
 };
 
 export const projectsService = {
-  getProjects: async (apiKey: string) => {
-    const res = await fetchHolded(`${BASE_URL}/v2/projects`, apiKey);
+  getProjects: async (apiKey: string, status?: string, cursor?: string, limit: number = 50) => {
+    let url = `${BASE_URL}/v2/projects?limit=${limit}`;
+    if (status && status !== 'all') {
+      url += `&status=${encodeURIComponent(status)}`;
+    }
+    if (cursor) {
+      url += `&cursor=${encodeURIComponent(cursor)}`;
+    }
+    const res = await fetchHolded(url, apiKey);
     const items = res && res.items ? res.items : (Array.isArray(res) ? res : []);
     return items.map(mapProjectToV1);
+  },
+  getProject: async (apiKey: string, projectId: string) => {
+    if (!projectId) throw new Error("projectId is required");
+    const res = await fetchHolded(`${BASE_URL}/v2/projects/${projectId}`, apiKey);
+    return mapProjectToV1(res);
+  },
+  getProjectSummary: async (apiKey: string, projectId: string) => {
+    if (!projectId) throw new Error("projectId is required");
+    return fetchHolded(`${BASE_URL}/v2/projects/${projectId}/summary`, apiKey);
   },
   createProject: async (apiKey: string, project: any) => {
     return fetchHolded(`${BASE_URL}/v2/projects`, apiKey, {
       method: 'POST',
       body: JSON.stringify(mapProjectToV2Payload(project))
+    });
+  },
+  updateProject: async (apiKey: string, projectId: string, project: any) => {
+    if (!projectId) throw new Error("projectId is required");
+    return fetchHolded(`${BASE_URL}/v2/projects/${projectId}`, apiKey, {
+      method: 'PUT',
+      body: JSON.stringify(mapProjectUpdateToV2Payload(project))
+    });
+  },
+  deleteProject: async (apiKey: string, projectId: string) => {
+    if (!projectId) throw new Error("projectId is required");
+    return fetchHolded(`${BASE_URL}/v2/projects/${projectId}`, apiKey, {
+      method: 'DELETE'
     });
   },
   getProjectStatuses: async (apiKey: string, projectId: string) => {
@@ -442,26 +565,41 @@ export const projectsService = {
       console.warn("Could not load project statuses from v2 project detail", e);
     }
     
-    // Fallback to v1 statuses if it fails
-    try {
-      return await fetchHolded(`${BASE_URL}/projects/v1/projects/${projectId}/statuses`, apiKey);
-    } catch (e) {
-      return [
-        { id: "0", name: "Por hacer", type: 0 },
-        { id: "1", name: "En progreso", type: 1 },
-        { id: "2", name: "Completado", type: 2 }
-      ];
-    }
+    return [
+      { id: "0", name: "Por hacer", type: 0 },
+      { id: "1", name: "En progreso", type: 1 },
+      { id: "2", name: "Completado", type: 2 }
+    ];
   },
-  getTasks: async (apiKey: string) => {
-    const res = await fetchHolded(`${BASE_URL}/v2/tasks`, apiKey);
+  getTasks: async (apiKey: string, cursor?: string, limit: number = 50) => {
+    let url = `${BASE_URL}/v2/tasks?limit=${limit}`;
+    if (cursor) url += `&cursor=${encodeURIComponent(cursor)}`;
+    const res = await fetchHolded(url, apiKey);
     const items = res && res.items ? res.items : (Array.isArray(res) ? res : []);
     return items.map(mapTaskToV1);
+  },
+  getTask: async (apiKey: string, taskId: string) => {
+    if (!taskId) throw new Error("taskId is required");
+    const res = await fetchHolded(`${BASE_URL}/v2/tasks/${taskId}`, apiKey);
+    return mapTaskToV1(res);
   },
   createTask: async (apiKey: string, task: any) => {
     return fetchHolded(`${BASE_URL}/v2/tasks`, apiKey, {
       method: 'POST',
       body: JSON.stringify(mapTaskToV2Payload(task))
+    });
+  },
+  updateTask: async (apiKey: string, taskId: string, task: any) => {
+    if (!taskId) throw new Error("taskId is required");
+    return fetchHolded(`${BASE_URL}/v2/tasks/${taskId}`, apiKey, {
+      method: 'PUT',
+      body: JSON.stringify(mapTaskToV2Payload(task))
+    });
+  },
+  deleteTask: async (apiKey: string, taskId: string) => {
+    if (!taskId) throw new Error("taskId is required");
+    return fetchHolded(`${BASE_URL}/v2/tasks/${taskId}`, apiKey, {
+      method: 'DELETE'
     });
   },
   addTimeTracking: async (apiKey: string, projectId: string, data: any) => {
@@ -471,20 +609,33 @@ export const projectsService = {
       body: JSON.stringify(mapTimeTrackingToV2Payload(data))
     });
   },
-  getProjectTimes: async (apiKey: string, projectId: string) => {
+  getProjectTimes: async (apiKey: string, projectId: string, cursor?: string, limit: number = 50) => {
     if (!projectId) throw new Error("projectId is required for getProjectTimes");
-    const res = await fetchHolded(`${BASE_URL}/v2/projects/${projectId}/times`, apiKey);
+    let url = `${BASE_URL}/v2/projects/${projectId}/times?limit=${limit}`;
+    if (cursor) url += `&cursor=${encodeURIComponent(cursor)}`;
+    const res = await fetchHolded(url, apiKey);
     return res && res.items ? res.items : (Array.isArray(res) ? res : []);
   },
-  updateTimeTracking: async (apiKey: string, projectId: string, timeTrackingId: string, data: any) => {
-    if (!projectId || !timeTrackingId) throw new Error("projectId and timeTrackingId are required");
-    return fetchHolded(`${BASE_URL}/v2/projects/${projectId}/times/${timeTrackingId}`, apiKey, {
+  getProjectTime: async (apiKey: string, projectId: string, timeId: string) => {
+    if (!projectId || !timeId) throw new Error("projectId and timeId are required");
+    return fetchHolded(`${BASE_URL}/v2/projects/${projectId}/times/${timeId}`, apiKey);
+  },
+  updateTimeTracking: async (apiKey: string, projectId: string, timeId: string, data: any) => {
+    if (!projectId || !timeId) throw new Error("projectId and timeId are required");
+    return fetchHolded(`${BASE_URL}/v2/projects/${projectId}/times/${timeId}`, apiKey, {
       method: "PUT",
       body: JSON.stringify(mapTimeTrackingToV2Payload(data))
     });
   },
-  getAllTimes: async (apiKey: string, start?: number, end?: number) => {
-    let url = `${BASE_URL}/v2/project-times?limit=100`;
+  deleteTimeTracking: async (apiKey: string, projectId: string, timeId: string) => {
+    if (!projectId || !timeId) throw new Error("projectId and timeId are required");
+    return fetchHolded(`${BASE_URL}/v2/projects/${projectId}/times/${timeId}`, apiKey, {
+      method: "DELETE"
+    });
+  },
+  getAllTimes: async (apiKey: string, cursor?: string, limit: number = 100) => {
+    let url = `${BASE_URL}/v2/project-times?limit=${limit}`;
+    if (cursor) url += `&cursor=${encodeURIComponent(cursor)}`;
     const res = await fetchHolded(url, apiKey);
     const items = res && res.items ? res.items : (Array.isArray(res) ? res : []);
     

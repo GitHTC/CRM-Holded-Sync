@@ -1,6 +1,8 @@
 const chromeObj = typeof window !== 'undefined' ? (window as any).chrome : undefined;
 const isExtension = chromeObj && chromeObj.runtime && chromeObj.runtime.id;
-const BASE_URL = isExtension ? 'https://api.holded.com/api' : '/api/holded';
+// Las rutas se construyen siempre contra el gateway seguro (nunca directamente contra Holded).
+// En la extensión la petición la firma el service worker con el token de Google del usuario.
+const BASE_URL = '/api/holded';
 
 export const HOLDED_CRM_API_URL = `${BASE_URL}/v2`;
 export const HOLDED_PROJECTS_API_URL = `${BASE_URL}/v2`;
@@ -265,12 +267,13 @@ const mapFunnel = (funnel: any) => ({
 
 // --- CORE FETCH FUNCTION ---
 
-export async function fetchHolded(url: string, apiKey: string, options: RequestInit = {}): Promise<any> {
+// El parámetro `_session` se conserva por compatibilidad con los servicios existentes;
+// ya NO es una clave de Holded: la autenticación la gestiona el gateway.
+export async function fetchHolded(url: string, _session: string, options: RequestInit = {}): Promise<any> {
   const headers = new Headers(options.headers);
-  // Set both v1 and v2 auth headers to ensure maximum compatibility with the API and proxy
-  headers.set('key', apiKey);
-  headers.set('Authorization', `Bearer ${apiKey}`);
   headers.set('Accept', 'application/json');
+  // Solo en desarrollo local (servidor con DEV_AUTH_EMAIL); en producción lo ignora el servidor.
+  if (!isExtension) headers.set('Authorization', 'Bearer dev');
   if (options.method && options.method !== 'GET' && !headers.has('Content-Type')) {
      headers.set('Content-Type', 'application/json');
   }
@@ -285,8 +288,8 @@ export async function fetchHolded(url: string, apiKey: string, options: RequestI
 
     return new Promise((resolve, reject) => {
       chrome.runtime.sendMessage({
-        action: 'fetchHolded',
-        url,
+        action: 'gatewayFetch',
+        path: url,
         options: {
           method: options.method || 'GET',
           headers: headersObj,
@@ -303,6 +306,9 @@ export async function fetchHolded(url: string, apiKey: string, options: RequestI
           return;
         }
 
+        if (response.status === 401 || response.status === 403 && /dominio|empleado/i.test(response.text || '')) {
+          window.dispatchEvent(new CustomEvent('segurnube:auth-expired'));
+        }
         if (!response.ok) {
           if (response.status === 404) {
             resolve([]); // Return empty array on 404 for compatibility
@@ -318,7 +324,7 @@ export async function fetchHolded(url: string, apiKey: string, options: RequestI
           } catch(e) {}
           if (typeof errMsg === 'string' && (errMsg.includes('<html') || errMsg.includes('<!DOCTYPE'))) {
             errMsg = response.status === 403 
-              ? 'Acceso denegado (403 Forbidden). El Token API no tiene permisos o es inválido.'
+              ? 'Acceso denegado (403 Forbidden). No tienes permisos para esta operación.'
               : `Error HTTP ${response.status}`;
           }
           reject(new Error(`Holded API Error ${response.status}: ${errMsg || response.statusText}`));
@@ -362,7 +368,7 @@ export async function fetchHolded(url: string, apiKey: string, options: RequestI
     } catch(e) {}
     if (typeof errMsg === 'string' && (errMsg.includes('<html') || errMsg.includes('<!DOCTYPE'))) {
       errMsg = response.status === 403 
-        ? 'Acceso denegado (403 Forbidden). El Token API no tiene permisos o es inválido.'
+        ? 'Acceso denegado (403 Forbidden). No tienes permisos para esta operación.'
         : `Error HTTP ${response.status}`;
     }
     throw new Error(`Holded API Error ${response.status}: ${errMsg || response.statusText}`);

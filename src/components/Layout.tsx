@@ -20,10 +20,11 @@ export function Layout({ children }: { children: ReactNode }) {
   return (
     <div className="flex flex-col h-full bg-white w-full overflow-hidden">
       {/* Header */}
-      <header className="flex items-center justify-between px-4 py-3 bg-white border-b border-gray-200 shadow-sm relative z-10">
-        <div className="flex items-center gap-2">
-          <div className="w-8 h-8 bg-[#1a73e8] rounded flex items-center justify-center text-white font-bold text-xl">H</div>
-          <h1 className="text-[#3c4043] font-google font-medium text-lg tracking-tight">Holded Sync</h1>
+      <header className="flex items-center justify-between px-4 py-3 bg-white border-b-2 border-b-digital/10 shadow-sm relative z-10">
+        <div className="flex items-center gap-3">
+          <img src="assets/brand/segurnube-logo.svg" alt="segurnube" className="h-6 w-auto" />
+          <span className="hidden sm:inline-block h-5 w-px bg-blue-100" />
+          <h1 className="hidden sm:block text-tech/70 font-display font-medium text-sm tracking-tight">CRM y Proyectos</h1>
         </div>
         <div className="flex gap-1 items-center">
           <button 
@@ -45,7 +46,7 @@ export function Layout({ children }: { children: ReactNode }) {
             onClick={() => setActiveTab('settings')}
             className={cn(
               "p-2 rounded-full transition-colors hover:bg-gray-100",
-              activeTab === 'settings' ? "text-[#1a73e8] bg-blue-50" : "text-gray-500"
+              activeTab === 'settings' ? "text-[#0057ff] bg-blue-50" : "text-gray-500"
             )}
             title="Ajustes"
           >
@@ -80,7 +81,7 @@ export function Layout({ children }: { children: ReactNode }) {
                 onClick={() => setActiveTab(item.id)}
                 className={cn(
                   "flex-1 flex flex-col items-center justify-center py-2 px-1 transition-colors",
-                  isActive ? "text-[#1a73e8]" : "text-[#5f6368] hover:bg-gray-50 hover:text-gray-900"
+                  isActive ? "text-[#0057ff]" : "text-[#5f6368] hover:bg-gray-50 hover:text-gray-900"
                 )}
               >
                 <div className={cn(

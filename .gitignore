@@ -5,3 +5,8 @@ coverage/
 *.log
 .env*
 !.env.example
+
+# Extensión empaquetada (se genera con npm run build)
+extension/
+*.zip
+dist/

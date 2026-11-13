@@ -1,25 +1,27 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 
-const DEFAULT_HOLDED_API_KEY = "REDACTED_HOLDED_KEY";
-const STORAGE_KEY = 'holded_user_id';
-const API_KEY_STORAGE_KEY = 'holded_api_key';
+const USER_ID_KEY = 'holded_user_id';
+const PROFILE_KEY = 'segurnube_profile';
+// Claves heredadas de versiones <3.0 (guardaban la API key de Holded en el navegador)
+const LEGACY_KEYS = ['holded_api_key'];
 
-function isInvalidKey(key: string | null | undefined): boolean {
-  if (!key) return true;
-  const trimmed = key.trim();
-  if (trimmed === "REDACTED_HOLDED_KEY" || trimmed === "REDACTED_HOLDED_KEY") return true;
-  if (trimmed === "REDACTED_HOLDED_KEY") return true;
-  // Holded Personal Access Tokens (PAT) format is pat_<account_id>_<secret_token> (~93 chars)
-  // If it ends with underscore or is shorter than 50 chars, it was truncated during copy-paste
-  if (trimmed.startsWith('pat_') && (trimmed.endsWith('_') || trimmed.length < 50)) return true;
-  return false;
+export interface UserProfile {
+  email: string;
+  name: string;
+  holdedUserId: string;
 }
 
 interface AppContextType {
+  /**
+   * Compatibilidad con los servicios existentes: ya NO es una clave de Holded.
+   * Vale 'session' cuando hay sesión iniciada y '' si no. La autenticación real
+   * la hace el service worker con el token de Google (ver background.js).
+   */
   holdedApiKey: string;
-  setHoldedApiKey: (key: string) => Promise<void>;
   holdedUserId: string | null;
-  setHoldedUserId: (id: string | null) => Promise<void>;
+  profile: UserProfile | null;
+  signIn: () => Promise<void>;
+  signOut: () => Promise<void>;
   activeTab: 'crm' | 'projects' | 'settings';
   setActiveTab: (tab: 'crm' | 'projects' | 'settings') => void;
   activeTask: string | null;
@@ -30,117 +32,109 @@ interface AppContextType {
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
+const chromeApi = () => (typeof window !== 'undefined' ? (window as any).chrome : undefined);
+const inExtension = () => Boolean(chromeApi()?.runtime?.id);
+
+function storageGet(keys: string[]): Promise<Record<string, any>> {
+  const c = chromeApi();
+  if (c?.storage?.local) return new Promise(res => c.storage.local.get(keys, res));
+  const out: Record<string, any> = {};
+  keys.forEach(k => {
+    const v = localStorage.getItem(k);
+    if (v !== null) { try { out[k] = JSON.parse(v); } catch { out[k] = v; } }
+  });
+  return Promise.resolve(out);
+}
+
+function storageSet(obj: Record<string, any>) {
+  const c = chromeApi();
+  if (c?.storage?.local) c.storage.local.set(obj);
+  else Object.entries(obj).forEach(([k, v]) => localStorage.setItem(k, JSON.stringify(v)));
+}
+
+function storageRemove(keys: string[]) {
+  const c = chromeApi();
+  if (c?.storage?.local) c.storage.local.remove(keys);
+  keys.forEach(k => localStorage.removeItem(k));
+}
+
+function sendToBackground(message: any): Promise<any> {
+  return new Promise((resolve, reject) => {
+    chromeApi().runtime.sendMessage(message, (res: any) => {
+      const err = chromeApi().runtime.lastError;
+      if (err) reject(new Error(err.message));
+      else resolve(res);
+    });
+  });
+}
+
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [holdedApiKey, setHoldedApiKeyState] = useState<string>(DEFAULT_HOLDED_API_KEY);
-  const [holdedUserId, setHoldedUserIdState] = useState<string | null>(null);
+  const [profile, setProfile] = useState<UserProfile | null>(null);
   const [activeTab, setActiveTab] = useState<'crm' | 'projects' | 'settings'>('settings');
   const [isLoaded, setIsLoaded] = useState(false);
-  
   const [activeTask, setActiveTask] = useState<string | null>(null);
   const [startTime, setStartTime] = useState<number | null>(null);
 
   useEffect(() => {
-    // Check extension storage first, fallback to localStorage
-    const loadSettings = async () => {
-      try {
-        const chrome = (window as any).chrome;
-        if (chrome && chrome.storage && chrome.storage.local) {
-          chrome.storage.local.get([STORAGE_KEY, API_KEY_STORAGE_KEY], (result: any) => {
-            const savedId = result[STORAGE_KEY];
-            let savedKey = result[API_KEY_STORAGE_KEY];
-            if (isInvalidKey(savedKey)) {
-              savedKey = DEFAULT_HOLDED_API_KEY;
-              chrome.storage.local.set({ [API_KEY_STORAGE_KEY]: DEFAULT_HOLDED_API_KEY });
-              localStorage.setItem(API_KEY_STORAGE_KEY, DEFAULT_HOLDED_API_KEY);
-            }
-            if (savedId) {
-              setHoldedUserIdState(savedId);
-              setActiveTab('crm');
-            } else {
-              setActiveTab('settings');
-            }
-            setHoldedApiKeyState(savedKey);
-            setIsLoaded(true);
-          });
-        } else {
-          const savedId = localStorage.getItem(STORAGE_KEY);
-          let savedKey = localStorage.getItem(API_KEY_STORAGE_KEY);
-          if (isInvalidKey(savedKey)) {
-            savedKey = DEFAULT_HOLDED_API_KEY;
-            localStorage.setItem(API_KEY_STORAGE_KEY, DEFAULT_HOLDED_API_KEY);
-          }
-          if (savedId) {
-            setHoldedUserIdState(savedId);
-            setActiveTab('crm');
-          } else {
-            setActiveTab('settings');
-          }
-          setHoldedApiKeyState(savedKey);
-          setIsLoaded(true);
-        }
-      } catch (e) {
-        console.error("Error loading settings", e);
-        // Fallback to local
-        const savedId = localStorage.getItem(STORAGE_KEY);
-        let savedKey = localStorage.getItem(API_KEY_STORAGE_KEY);
-        if (isInvalidKey(savedKey)) {
-          savedKey = DEFAULT_HOLDED_API_KEY;
-          localStorage.setItem(API_KEY_STORAGE_KEY, DEFAULT_HOLDED_API_KEY);
-        }
-        if (savedId) {
-          setHoldedUserIdState(savedId);
-          setActiveTab('crm');
-        }
-        setHoldedApiKeyState(savedKey);
-        setIsLoaded(true);
+    (async () => {
+      // Migración: eliminar cualquier API key que versiones anteriores dejaron en el navegador
+      storageRemove(LEGACY_KEYS);
+      const saved = await storageGet([PROFILE_KEY]);
+      const p = saved[PROFILE_KEY] as UserProfile | undefined;
+      if (p?.holdedUserId) {
+        setProfile(p);
+        setActiveTab('crm');
       }
-    };
-    
-    loadSettings();
+      setIsLoaded(true);
+    })();
   }, []);
 
-  const handleSetApiKey = async (key: string) => {
-    setHoldedApiKeyState(key);
+  const doSignOut = useCallback(async () => {
     try {
-      const chrome = (window as any).chrome;
-      if (chrome && chrome.storage && chrome.storage.local) {
-        chrome.storage.local.set({ [API_KEY_STORAGE_KEY]: key });
-      }
-      localStorage.setItem(API_KEY_STORAGE_KEY, key);
-    } catch (e) {
-      console.error('Error saving API key', e);
-    }
-  };
+      if (inExtension()) await sendToBackground({ action: 'signOut' });
+    } catch { /* noop */ }
+    storageRemove([USER_ID_KEY, PROFILE_KEY]);
+    setProfile(null);
+    setActiveTab('settings');
+  }, []);
 
-  const handleSetUserId = async (id: string | null) => {
-    setHoldedUserIdState(id);
-    try {
-      const chrome = (window as any).chrome;
-      if (chrome && chrome.storage && chrome.storage.local) {
-        if (id) {
-          chrome.storage.local.set({ [STORAGE_KEY]: id });
-        } else {
-          chrome.storage.local.remove([STORAGE_KEY]);
-        }
-      }
-      // Always fallback to localStorage as well just in case
-      if (id) {
-        localStorage.setItem(STORAGE_KEY, id);
-      } else {
-        localStorage.removeItem(STORAGE_KEY);
-      }
-    } catch (e) {
-      console.error('Error saving settings', e);
+  // El gateway devolvió 401/403: la sesión ya no es válida
+  useEffect(() => {
+    const onExpired = () => { void doSignOut(); };
+    window.addEventListener('segurnube:auth-expired', onExpired);
+    return () => window.removeEventListener('segurnube:auth-expired', onExpired);
+  }, [doSignOut]);
+
+  const signIn = useCallback(async () => {
+    let res: { ok: boolean; status: number; text: string; error?: string };
+    if (inExtension()) {
+      res = await sendToBackground({ action: 'signIn' });
+    } else {
+      // Modo desarrollo local (servidor con DEV_AUTH_EMAIL)
+      const r = await fetch('/api/me', { headers: { Authorization: 'Bearer dev' } });
+      res = { ok: r.ok, status: r.status, text: await r.text() };
     }
-  }
+    if (!res?.ok) {
+      let msg = res?.error || '';
+      try { msg = JSON.parse(res.text).message || msg; } catch { /* noop */ }
+      throw new Error(msg || `No se pudo iniciar sesión (${res?.status ?? 'sin respuesta'})`);
+    }
+    const data = JSON.parse(res.text) as UserProfile;
+    const p: UserProfile = { email: data.email, name: data.name, holdedUserId: String(data.holdedUserId) };
+    storageSet({ [PROFILE_KEY]: p, [USER_ID_KEY]: p.holdedUserId });
+    setProfile(p);
+    setActiveTab('crm');
+  }, []);
 
   if (!isLoaded) return null;
 
   return (
     <AppContext.Provider value={{
-      holdedApiKey,
-      setHoldedApiKey: handleSetApiKey,
-      holdedUserId, setHoldedUserId: handleSetUserId,
+      holdedApiKey: profile ? 'session' : '',
+      holdedUserId: profile?.holdedUserId ?? null,
+      profile,
+      signIn,
+      signOut: doSignOut,
       activeTab, setActiveTab,
       activeTask, setActiveTask,
       startTime, setStartTime
@@ -157,4 +151,3 @@ export const useAppContext = () => {
   }
   return context;
 };
-

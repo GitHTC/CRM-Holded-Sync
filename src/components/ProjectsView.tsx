@@ -36,7 +36,7 @@ import { EditTaskModal } from './EditTaskModal';
 import { DailyHoursModal } from './DailyHoursModal';
 
 export function ProjectsView() {
-  const { holdedApiKey, holdedUserId, setHoldedUserId, activeTask, setActiveTask, startTime, setStartTime } = useAppContext();
+  const { holdedApiKey, holdedUserId, activeTask, setActiveTask, startTime, setStartTime } = useAppContext();
   const [projects, setProjects] = useState<any[]>([]);
   const [tasks, setTasks] = useState<any[]>([]);
   const [contacts, setContacts] = useState<any[]>([]);
@@ -223,15 +223,6 @@ export function ProjectsView() {
         const employeesArr = Array.isArray(employeesData) ? employeesData : [];
 
         setEmployees(employeesArr);
-
-        if (holdedUserId && employeesArr.length > 0) {
-          const matchedEmp = employeesArr.find(
-            (e: any) => e.id === holdedUserId || e.employeeId === holdedUserId
-          );
-          if (matchedEmp && matchedEmp.rawHoldedUserId && matchedEmp.rawHoldedUserId !== holdedUserId) {
-            setHoldedUserId(matchedEmp.rawHoldedUserId);
-          }
-        }
 
         processAndSetTimes(timesArr, tasksArr);
       }).catch(e => {

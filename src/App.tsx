@@ -10,10 +10,10 @@ import { ProjectsView } from './components/ProjectsView';
 import { SettingsView } from './components/SettingsView';
 
 function AppContent() {
-  const { holdedApiKey, holdedUserId, activeTab } = useAppContext();
+  const { holdedUserId, activeTab } = useAppContext();
 
   // If missing user setup, force Settings view
-  if (!holdedApiKey || !holdedUserId) {
+  if (!holdedUserId) {
     return (
       <Layout>
         <SettingsView />

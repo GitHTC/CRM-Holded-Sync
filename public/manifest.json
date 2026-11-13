@@ -1,10 +1,16 @@
 {
   "manifest_version": 3,
-  "name": "Holded x Google Workspace Sync",
-  "description": "Una extensión para integrar Holded CRM y Proyectos con Google Workspace.",
-  "version": "2.0.0",
+  "name": "Segurnube · Holded CRM y Proyectos",
+  "description": "Gestiona oportunidades, tareas y registro de tiempos de Holded sin salir de Google Workspace.",
+  "version": "3.0.0",
   "action": {
-    "default_title": "Holded Sync"
+    "default_title": "Holded Sync",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png",
+      "48": "icons/icon-48.png",
+      "128": "icons/icon-128.png"
+    }
   },
   "background": {
     "service_worker": "background.js"
@@ -17,7 +23,9 @@
         "https://calendar.google.com/*",
         "https://drive.google.com/*"
       ],
-      "js": ["content.js"],
+      "js": [
+        "content.js"
+      ],
       "run_at": "document_end"
     }
   ],
@@ -28,11 +36,16 @@
     "identity.email"
   ],
   "host_permissions": [
-    "https://api.holded.com/*"
+    "https://REPLACE_GATEWAY_URL/*",
+    "https://oauth2.googleapis.com/*",
+    "https://accounts.google.com/*"
   ],
   "web_accessible_resources": [
     {
-      "resources": ["index.html", "assets/*"],
+      "resources": [
+        "index.html",
+        "assets/*"
+      ],
       "matches": [
         "https://mail.google.com/*",
         "https://chat.google.com/*",
@@ -40,5 +53,21 @@
         "https://drive.google.com/*"
       ]
     }
-  ]
+  ],
+  "oauth2": {
+    "client_id": "REPLACE_OAUTH_CLIENT_ID.apps.googleusercontent.com",
+    "scopes": [
+      "openid",
+      "email"
+    ]
+  },
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'"
+  }
 }

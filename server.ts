@@ -1,55 +1,25 @@
 import express from 'express';
-import { createProxyMiddleware } from 'http-proxy-middleware';
+import 'dotenv/config';
+import { createGateway } from './server/gateway';
 import cors from 'cors';
 import path from 'path';
-import fs from 'fs';
 
 async function startServer() {
   const app = express();
-  const PORT = 3000;
+  const PORT = Number(process.env.PORT) || 3000;
 
-  app.use(cors());
-
-  // Direct download endpoint for the Chrome Extension ZIP (version 2.0.0)
-  app.get('/api/download-extension', (req, res) => {
-    const zipPath = path.join(process.cwd(), 'holded-sync-v2.0.0.zip');
-    if (fs.existsSync(zipPath)) {
-      res.setHeader('Content-Disposition', 'attachment; filename="holded-sync-v2.0.0.zip"');
-      res.setHeader('Content-Type', 'application/zip');
-      res.sendFile(zipPath);
-    } else {
-      res.status(404).send('holded-sync-v2.0.0.zip no encontrado. Compilando...');
-    }
-  });
-
-  // Proxy the Holded API
-  app.use('/api/holded', createProxyMiddleware({
-    target: 'https://api.holded.com',
-    changeOrigin: true,
-    pathRewrite: (path, req: any) => {
-      // http-proxy-middleware provides req.originalUrl inside Express.
-      if (req.originalUrl) {
-        return req.originalUrl.replace(/^\/api\/holded/, '/api');
-      }
-      return path.replace(/^\/api\/holded/, '/api');
+  const allowedOrigins = (process.env.ALLOWED_ORIGINS || '').split(',').map(s => s.trim()).filter(Boolean);
+  app.use(cors({
+    origin: (origin, cb) => {
+      // Sin origin (llamadas servidor/background), extensiones Chrome o lista explícita
+      if (!origin || origin.startsWith('chrome-extension://') || allowedOrigins.includes(origin) ||
+          (process.env.NODE_ENV !== 'production' && origin.startsWith('http://localhost'))) return cb(null, true);
+      cb(new Error('Origen no permitido'));
     },
-    on: {
-      proxyReq: (proxyReq, req: any) => {
-        // Prevent Holded from blocking standard fetch user agents
-        proxyReq.setHeader('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/100.0.0.0 Safari/537.36');
-        if (req.headers.key) {
-          proxyReq.setHeader('key', req.headers.key);
-        }
-        if (req.headers.authorization) {
-          proxyReq.setHeader('Authorization', req.headers.authorization);
-        }
-      },
-      proxyRes: (proxyRes, req, res) => {
-        // Log the response status from holded
-        console.log(`[PROXY] ${req.method} ${req.url} -> ${proxyRes.statusCode}`);
-      }
-    }
   }));
+
+  // Gateway seguro: login con Google + proxy a Holded (la clave vive solo aquí)
+  app.use('/api', createGateway());
 
   // Vite middleware for development
   if (process.env.NODE_ENV !== 'production') {

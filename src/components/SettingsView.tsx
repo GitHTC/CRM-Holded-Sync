@@ -1,403 +1,115 @@
-import React, { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useAppContext } from '../context/AppContext';
-import { teamService } from '../services/holded';
-import { User, CheckCircle2, LogIn, LogOut, Mail, RefreshCw, Key, AlertTriangle, Download, Package } from 'lucide-react';
+import { LogIn, LogOut, RefreshCw, ShieldCheck, AlertTriangle, UserRound } from 'lucide-react';
+
+/** Bloques de píxel de la marca: decoración de la pantalla de acceso. */
+function PixelDecor() {
+  return (
+    <div aria-hidden className="pointer-events-none absolute inset-x-0 bottom-0 h-40 overflow-hidden">
+      <div className="absolute right-6 bottom-4 grid grid-cols-3 gap-1.5 opacity-90">
+        {[0, 1, 0, 0, 1, 1, 1, 0, 0].map((on, i) => (
+          <span
+            key={i}
+            className={`w-7 h-7 rounded-[5px] ${on ? (i % 2 ? 'bg-soul' : 'bg-digital') : 'bg-transparent'}`}
+          />
+        ))}
+      </div>
+      <span className="absolute left-8 bottom-8 w-5 h-5 rounded-[4px] bg-human" />
+      <span className="absolute left-16 bottom-3 w-3 h-3 rounded-[3px] bg-soul" />
+    </div>
+  );
+}
 
 export function SettingsView() {
-  const { holdedApiKey, setHoldedApiKey, holdedUserId, setHoldedUserId, activeTab, setActiveTab } = useAppContext();
-  const [employees, setEmployees] = useState<any[]>([]);
-  const [apiKeyInput, setApiKeyInput] = useState<string>(holdedApiKey || '');
-  const [emailInput, setEmailInput] = useState<string>('');
-  const [saved, setSaved] = useState(false);
+  const { profile, signIn, signOut, setActiveTab } = useAppContext();
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
-  const [currentUserInfo, setCurrentUserInfo] = useState<any>(null);
-  const [isEditingKey, setIsEditingKey] = useState(false);
-  const [keySavedMessage, setKeySavedMessage] = useState(false);
 
-  useEffect(() => {
-    if (holdedApiKey) {
-      loadEmployees(holdedApiKey);
-      setApiKeyInput(holdedApiKey);
-    }
-  }, [holdedApiKey]);
-
-  useEffect(() => {
-    // Attempt to auto-fill email from Chrome Extension Identity if available
-    const chrome = (window as any).chrome;
-    if (chrome && chrome.identity && chrome.identity.getProfileUserInfo) {
-      chrome.identity.getProfileUserInfo({ accountStatus: "ANY" }, (userInfo: any) => {
-        if (userInfo && userInfo.email && !emailInput) {
-          setEmailInput(userInfo.email);
-        }
-      });
-    }
-  }, []);
-
-  useEffect(() => {
-    if (holdedUserId && employees.length > 0) {
-      const current = employees.find(emp => emp.holdedUserId === holdedUserId || emp.id === holdedUserId);
-      if (current) setCurrentUserInfo(current);
-    } else {
-      setCurrentUserInfo(null);
-    }
-  }, [holdedUserId, employees]);
-
-  const loadEmployees = async (key: string) => {
+  const handleSignIn = async () => {
+    setLoading(true);
+    setErrorMsg('');
     try {
-      setLoading(true);
-      setErrorMsg('');
-      const data = await teamService.getEmployees(key);
-      const employeesList = Array.isArray(data) ? data : ((data as any)?.employees || []);
-      setEmployees(employeesList);
-      if (employeesList.length === 0) {
-        setErrorMsg('No se recuperaron empleados de Holded. Esto suele ocurrir si el Token API no tiene los permisos necesarios en Holded.');
-      }
+      await signIn();
     } catch (e: any) {
-      console.warn("Error loading employees", e);
-      const msg = e?.message || '';
-      if (msg.includes('403') || msg.includes('denegado') || msg.includes('Forbidden')) {
-        setErrorMsg('Error 403 (Acceso denegado): El Token API introducido no tiene permisos para consultar el directorio de empleados o es un token truncado/incompleto.');
-      } else {
-        setErrorMsg(`Error de conexión con Holded (${msg}). Por favor, revisa tu Token API.`);
-      }
+      setErrorMsg(e?.message || 'No se pudo iniciar sesión.');
     } finally {
       setLoading(false);
     }
-  };
-
-  const handleSaveApiKey = async () => {
-    const trimmed = apiKeyInput.trim();
-    if (!trimmed) return;
-    if (trimmed.startsWith('pat_') && (trimmed.endsWith('_') || trimmed.length < 50)) {
-      setErrorMsg('El token Personal Access Token parece incompleto (termina en "_" o le faltan caracteres del secreto). El formato de Holded es pat_<id>_<secreto>.');
-      return;
-    }
-    setLoading(true);
-    setErrorMsg('');
-    try {
-      await setHoldedApiKey(trimmed);
-      setKeySavedMessage(true);
-      setTimeout(() => setKeySavedMessage(false), 3000);
-      await loadEmployees(trimmed);
-    } catch (e: any) {
-      setErrorMsg(e?.message || 'Error al guardar el Token API.');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleResetApiKey = async () => {
-    const defaultKey = "REDACTED_HOLDED_KEY";
-    setApiKeyInput(defaultKey);
-    setLoading(true);
-    setErrorMsg('');
-    try {
-      await setHoldedApiKey(defaultKey);
-      setKeySavedMessage(true);
-      setTimeout(() => setKeySavedMessage(false), 3000);
-      await loadEmployees(defaultKey);
-    } catch (e) {
-      setErrorMsg('Error al restablecer el Token API.');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleLogin = async (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    if (!emailInput.trim()) {
-      setErrorMsg('Por favor, introduce tu correo electrónico corporativo.');
-      return;
-    }
-
-    if (employees.length === 0) {
-      setErrorMsg('No se puede iniciar sesión porque el directorio de empleados está vacío. Por favor, asegúrate de que el Token API de Holded es correcto.');
-      return;
-    }
-
-    setLoading(true);
-    setErrorMsg('');
-    try {
-      const emailLower = emailInput.toLowerCase().trim();
-      
-      const match = employees.find(emp => 
-        (emp.email && emp.email.toLowerCase() === emailLower) || 
-        (emp.mainEmail && emp.mainEmail.toLowerCase() === emailLower)
-      );
-
-      if (match) {
-        // En Holded API, algunos endpoints usan id y otros holdedUserId. Preferimos holdedUserId pero caemos de vuelta al id nativo.
-        const idToSave = match.holdedUserId || match.id;
-        await setHoldedUserId(idToSave);
-        setCurrentUserInfo(match);
-        setSaved(true);
-        setTimeout(() => {
-          setSaved(false);
-          if (activeTab === 'settings') {
-            setActiveTab('crm');
-          }
-        }, 1000);
-      } else {
-        setErrorMsg('No se encontró ningún empleado en Holded con ese correo.');
-      }
-    } catch(err) {
-      setErrorMsg('Error validando el usuario.');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleClear = async () => {
-    await setHoldedUserId(null);
-    setEmailInput('');
-    setCurrentUserInfo(null);
   };
 
   return (
-    <div className="p-6 h-full bg-white flex flex-col pt-12 items-center overflow-y-auto">
-      <div className="text-center mb-10">
-        {currentUserInfo ? (
-          <div className="mx-auto w-16 h-16 bg-green-50 text-green-600 rounded-full flex items-center justify-center mb-6">
-            <CheckCircle2 size={32} />
-          </div>
-        ) : (
-          <div className="mx-auto w-16 h-16 bg-blue-50 text-[#1a73e8] rounded-full flex items-center justify-center mb-6">
-            <User size={32} />
-          </div>
-        )}
-        
-        <h2 className="text-2xl font-google text-[#202124] mb-2">
-          {currentUserInfo ? `¡Hola, ${currentUserInfo.name}!` : 'Acceso a Holded Sync'}
-        </h2>
-        <p className="text-[#5f6368] text-sm">
-          {currentUserInfo 
-            ? 'Has sincronizado tu cuenta correctamente.'
-            : 'Introduce tu correo electrónico de Google Workspace asociado a Holded.'}
-        </p>
-      </div>
+    <div className="relative h-full bg-blue-50/60 overflow-y-auto">
+      <div className="relative z-10 flex flex-col items-center px-6 pt-10 pb-44">
+        <div className="w-full max-w-sm bg-white rounded-2xl shadow-[0_8px_32px_rgba(0,87,255,0.10)] border border-blue-100 p-7">
+          {profile ? (
+            <>
+              <div className="mx-auto w-14 h-14 rounded-2xl bg-human/30 text-tech flex items-center justify-center mb-5">
+                <ShieldCheck size={28} />
+              </div>
+              <h2 className="text-2xl font-display font-semibold text-tech text-center mb-1">
+                ¡Hola, {profile.name.split(' ')[0] || 'equipo'}!
+              </h2>
+              <p className="text-sm text-tech/60 text-center mb-6">Sesión iniciada con tu cuenta de Google Workspace.</p>
 
-      <div className="space-y-6 w-full max-w-sm">
-        {!holdedUserId ? (
-          <div className="space-y-4">
-            <form onSubmit={handleLogin} className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-[#3c4043] mb-2 font-google">
-                  Correo Electrónico
-                </label>
-                <div className="relative">
-                  <input
-                    type="email"
-                    value={emailInput}
-                    onChange={(e) => setEmailInput(e.target.value)}
-                    disabled={loading}
-                    placeholder="ejemplo@tu-dominio.com"
-                    className="w-full pl-10 pr-4 py-3 bg-gray-50 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#1a73e8] shadow-sm text-gray-800 disabled:opacity-50"
-                    required
-                  />
-                  <Mail size={18} className="absolute left-3 top-3.5 text-gray-500" />
+              <div className="bg-blue-50 rounded-xl p-4 mb-5 flex items-center gap-3">
+                <div className="w-10 h-10 rounded-full bg-digital text-white flex items-center justify-center shrink-0">
+                  <UserRound size={20} />
                 </div>
-                {employees.length > 0 && (
-                  <div className="mt-3">
-                    <p className="text-xs text-gray-500 font-medium mb-1.5 flex justify-between">
-                      <span>Empleados detectados en Holded:</span>
-                      <span className="text-blue-600 font-normal">Haz clic para auto-rellenar</span>
-                    </p>
-                    <div className="flex flex-col gap-1 max-h-32 overflow-y-auto p-2 bg-gray-50 rounded-md border border-gray-200">
-                      {employees.map(emp => (
-                        <button
-                          key={emp.id}
-                          type="button"
-                          onClick={() => setEmailInput(emp.email || emp.mainEmail || '')}
-                          className="text-left text-xs px-2 py-1.5 bg-white hover:bg-blue-50 border border-gray-200 hover:border-blue-200 text-gray-700 hover:text-[#1a73e8] rounded transition-colors flex justify-between items-center"
-                        >
-                          <span className="font-medium truncate">{emp.fullName || emp.name}</span>
-                          <span className="text-[10px] text-gray-500 font-mono truncate">{emp.email || emp.mainEmail}</span>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
-                {employees.length === 0 && loading && (
-                  <p className="text-xs text-blue-500 mt-2 flex items-center gap-1">
-                    <RefreshCw size={12} className="animate-spin" /> Cargando directorio...
-                  </p>
-                )}
-                {employees.length === 0 && !loading && (
-                  <div className="mt-2 p-3 bg-amber-50 border border-amber-200 rounded-md text-amber-800 text-xs flex items-start gap-2">
-                    <AlertTriangle size={16} className="shrink-0 text-amber-600 mt-0.5" />
-                    <div>
-                      <p className="font-bold">Directorio de empleados vacío</p>
-                      <p className="mt-0.5 text-[11px] leading-relaxed">
-                        No se ha podido conectar con Holded o el directorio está vacío. Por favor, <strong>configura tu Token API de Holded abajo</strong>.
-                      </p>
-                    </div>
-                  </div>
-                )}
+                <div className="min-w-0">
+                  <p className="text-sm font-medium text-tech truncate">{profile.name}</p>
+                  <p className="text-xs text-tech/60 truncate">{profile.email}</p>
+                </div>
               </div>
 
-              {errorMsg && (
-                <div className="p-3 bg-red-50 text-red-700 text-xs rounded-md border border-red-200 space-y-2">
-                  <p>{errorMsg}</p>
-                  <button
-                    type="button"
-                    onClick={handleResetApiKey}
-                    className="text-xs font-semibold text-blue-700 hover:text-blue-900 underline flex items-center gap-1.5 pt-1"
-                  >
-                    <RefreshCw size={12} /> Restablecer al Token API funcional por defecto
-                  </button>
-                </div>
-              )}
+              <button
+                onClick={() => setActiveTab('crm')}
+                className="w-full bg-digital hover:bg-blue-700 text-white font-medium py-3 px-4 rounded-xl transition-colors mb-3"
+              >
+                Ir a mi panel
+              </button>
+              <button
+                onClick={signOut}
+                className="w-full px-4 py-3 text-tech/70 hover:text-tech bg-white hover:bg-blue-50 border border-blue-100 font-medium rounded-xl transition-colors flex justify-center items-center gap-2"
+              >
+                <LogOut size={16} /> Cerrar sesión
+              </button>
+            </>
+          ) : (
+            <>
+              <h2 className="text-2xl font-display font-semibold text-tech text-center mb-2">
+                Accede a tu cuenta
+              </h2>
+              <p className="text-sm text-tech/60 text-center mb-7 leading-relaxed">
+                Usa tu cuenta de Google Workspace. Verificaremos que eres empleado en Holded y solo verás tus datos.
+              </p>
 
               <button
-                type="submit"
-                disabled={loading || !emailInput}
-                className="w-full bg-[#1a73e8] hover:bg-[#1557b0] text-white font-medium py-3 px-4 rounded-md transition-colors shadow-sm disabled:opacity-50 flex justify-center items-center gap-2"
+                onClick={handleSignIn}
+                disabled={loading}
+                className="w-full bg-digital hover:bg-blue-700 text-white font-medium py-3 px-4 rounded-xl transition-colors disabled:opacity-60 flex justify-center items-center gap-2"
               >
-                {loading && employees.length > 0 ? (
-                  <><RefreshCw size={18} className="animate-spin" /> Verificando...</>
-                ) : saved ? (
-                  <><CheckCircle2 size={18} /> Validado</>
+                {loading ? (
+                  <><RefreshCw size={18} className="animate-spin" /> Verificando…</>
                 ) : (
-                  <><LogIn size={18} /> Iniciar Sesión Segura</>
+                  <><LogIn size={18} /> Iniciar sesión con Google</>
                 )}
               </button>
-              <p className="text-center text-xs text-gray-500 pt-2">
-                El correo debe coincidir con tu perfil de Holded. Esto evita suplantaciones.
+
+              {errorMsg && (
+                <div className="mt-4 p-3 bg-amber-50 border border-amber-200 rounded-xl text-amber-900 text-xs flex items-start gap-2">
+                  <AlertTriangle size={16} className="shrink-0 text-amber-600 mt-0.5" />
+                  <p className="leading-relaxed">{errorMsg}</p>
+                </div>
+              )}
+
+              <p className="text-center text-xs text-tech/50 mt-5 leading-relaxed">
+                No necesitas ninguna clave API. Tu administrador la gestiona de forma segura en el servidor.
               </p>
-            </form>
-
-            <div className="pt-4 border-t border-gray-100">
-              <button
-                type="button"
-                onClick={() => setIsEditingKey(!isEditingKey)}
-                className="text-xs text-[#1a73e8] hover:underline font-medium flex items-center justify-center w-full gap-1"
-              >
-                <Key size={14} />
-                {isEditingKey ? 'Ocultar ajustes del Token API' : 'Configurar Token API de Holded'}
-              </button>
-              
-              {isEditingKey && (
-                <div className="mt-4 p-4 bg-gray-50 rounded-xl border border-gray-200 space-y-3">
-                  <p className="text-[11px] text-gray-500 leading-relaxed">
-                    Si tu información no aparece, puedes introducir o cambiar el Token API de tu cuenta de Holded aquí:
-                  </p>
-                  <div>
-                    <input
-                      type="password"
-                      value={apiKeyInput}
-                      onChange={(e) => setApiKeyInput(e.target.value)}
-                      placeholder="Introduce tu Token API de Holded..."
-                      className="w-full px-3 py-2 bg-white border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#1a73e8] text-xs font-mono"
-                    />
-                  </div>
-                  <div className="flex gap-2">
-                    <button
-                      type="button"
-                      onClick={handleSaveApiKey}
-                      disabled={loading || !apiKeyInput.trim()}
-                      className="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-bold py-1.5 px-3 rounded text-xs transition"
-                    >
-                      Guardar Token
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleResetApiKey}
-                      disabled={loading}
-                      className="bg-gray-200 hover:bg-gray-300 text-gray-700 font-bold py-1.5 px-3 rounded text-xs transition"
-                    >
-                      Restablecer
-                    </button>
-                  </div>
-                  {keySavedMessage && (
-                    <p className="text-[10px] text-green-600 font-bold">¡Token API actualizado con éxito!</p>
-                  )}
-                </div>
-              )}
-            </div>
-          </div>
-        ) : (
-          <div className="flex flex-col gap-3 pt-6">
-            <div className="bg-gray-50 p-4 rounded-lg border border-gray-200 mb-4">
-              <p className="text-sm text-gray-500 mb-1">Sesión activa como:</p>
-              <p className="font-medium text-gray-900">{currentUserInfo?.mainEmail || currentUserInfo?.email || 'Usuario de Holded'}</p>
-            </div>
-            
-            <button
-              onClick={handleClear}
-              className="w-full px-4 py-3 text-[#ea4335] bg-red-50 hover:bg-red-100 font-medium rounded-md transition-colors flex justify-center items-center gap-2"
-            >
-              <LogOut size={16} />
-              Cerrar Sesión Local
-            </button>
-
-            <div className="pt-4 border-t border-gray-100">
-              <button
-                type="button"
-                onClick={() => setIsEditingKey(!isEditingKey)}
-                className="text-xs text-[#1a73e8] hover:underline font-medium flex items-center justify-center w-full gap-1"
-              >
-                <Key size={14} />
-                {isEditingKey ? 'Ocultar ajustes del Token API' : 'Ver / Editar Token API'}
-              </button>
-              
-              {isEditingKey && (
-                <div className="mt-4 p-4 bg-gray-50 rounded-xl border border-gray-200 space-y-3">
-                  <div>
-                    <input
-                      type="password"
-                      value={apiKeyInput}
-                      onChange={(e) => setApiKeyInput(e.target.value)}
-                      placeholder="Introduce tu Token API de Holded..."
-                      className="w-full px-3 py-2 bg-white border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#1a73e8] text-xs font-mono"
-                    />
-                  </div>
-                  <div className="flex gap-2">
-                    <button
-                      type="button"
-                      onClick={handleSaveApiKey}
-                      disabled={loading || !apiKeyInput.trim()}
-                      className="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-bold py-1.5 px-3 rounded text-xs transition"
-                    >
-                      Guardar Token
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleResetApiKey}
-                      disabled={loading}
-                      className="bg-gray-200 hover:bg-gray-300 text-gray-700 font-bold py-1.5 px-3 rounded text-xs transition"
-                    >
-                      Restablecer
-                    </button>
-                  </div>
-                  {keySavedMessage && (
-                    <p className="text-[10px] text-green-600 font-bold">¡Token API actualizado con éxito!</p>
-                  )}
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-
-        {/* Descarga directa del paquete de la Extensión Chrome para ChromeOS */}
-        <div className="mt-8 p-4 bg-blue-50/70 border border-blue-200 rounded-xl space-y-2.5">
-          <div className="flex items-center gap-2 text-blue-900 font-semibold text-xs">
-            <Package size={16} className="text-blue-600" />
-            <span>Paquete Extensión Chrome v2.0.0</span>
-          </div>
-          <p className="text-[11px] text-blue-700/90 leading-relaxed">
-            Descarga directamente el archivo ZIP listo para instalar en modo desarrollador o subir a la Chrome Web Store.
-          </p>
-          <a
-            href="/api/download-extension"
-            download="holded-sync-v2.0.0.zip"
-            className="w-full bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold py-2.5 px-3 rounded-lg flex items-center justify-center gap-2 shadow-sm transition-all"
-          >
-            <Download size={14} />
-            Descargar holded-sync-v2.0.0.zip
-          </a>
+            </>
+          )}
         </div>
       </div>
+      <PixelDecor />
     </div>
   );
 }

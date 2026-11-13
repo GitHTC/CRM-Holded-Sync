@@ -1,20 +1,27 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://ai.google.dev/static/site-assets/images/share-ais-513315318.png" />
-</div>
+# Segurnube · Holded CRM y Proyectos (extensión de Chrome)
 
-# Run and deploy your AI Studio app
+Gestiona oportunidades (CRM), tareas y registro de tiempos de Holded desde Gmail, Chat, Calendar y Drive.
 
-This contains everything you need to run your app locally.
+## Seguridad (v3)
 
-View your app in AI Studio: https://ai.studio/apps/8df622e9-7e7e-4246-86da-a45578783213
+```
+Extensión ──(token de Google)──▶ Gateway (Cloud Run) ──(clave Holded)──▶ Holded
+```
 
-## Run Locally
+- **La clave API de Holded nunca llega al navegador.** Vive solo en el gateway (`HOLDED_API_KEY`, idealmente en Secret Manager).
+- El usuario inicia sesión con su **cuenta de Google Workspace** (`chrome.identity`). El gateway verifica el token con Google, comprueba el dominio permitido y lo cruza con los empleados de Holded.
+- El cliente solo recibe **su propio** registro de empleado: no se puede listar ni suplantar a otros usuarios.
+- El gateway solo reenvía a Holded las rutas de CRM y Proyectos que usa la extensión.
 
-**Prerequisites:**  Node.js
+## Despliegue
 
+1. **Rotar la clave de Holded** (la anterior estuvo publicada en el repositorio) y generar una nueva en Holded.
+2. Desplegar el gateway (`npm run build && npm start`) en Cloud Run con las variables de `.env.example`
+   (`HOLDED_API_KEY` como secreto, `ALLOWED_DOMAINS`, `GOOGLE_OAUTH_CLIENT_ID`).
+3. En Google Cloud, crear un cliente OAuth de tipo **Extensión de Chrome** con el ID de la extensión de la Chrome Web Store.
+4. Empaquetar: `GATEWAY_URL=https://… OAUTH_CLIENT_ID=… npm run build` → `segurnube-holded-sync-v3.0.0.zip`.
+5. Subir el ZIP a la Chrome Web Store.
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+## Desarrollo local
+
+`DEV_AUTH_EMAIL=tu@correo.com HOLDED_API_KEY=… npm run dev` (la identidad de desarrollo se ignora con `NODE_ENV=production`).

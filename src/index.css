@@ -1,10 +1,30 @@
 @import "tailwindcss";
 
 @theme {
-  --font-sans: 'Open Sans', system-ui, -apple-system, sans-serif;
-  --font-google: 'Google Sans', 'Open Sans', system-ui, -apple-system, sans-serif;
-  
-  --color-google-blue: #1a73e8;
+  /* Tipografía Segurnube: Funnel Display (títulos) + Poppins (texto) */
+  --font-sans: 'Poppins', system-ui, -apple-system, sans-serif;
+  --font-google: 'Funnel Display Variable', 'Poppins', system-ui, sans-serif;
+  --font-display: 'Funnel Display Variable', 'Poppins', system-ui, sans-serif;
+
+  /* Paleta de marca */
+  --color-tech: #0a1c3a;
+  --color-digital: #0057ff;
+  --color-soul: #4cdbff;
+  --color-human: #52ffc2;
+
+  /* El "blue" de Tailwind pasa a ser el azul Digital de Segurnube */
+  --color-blue-50: #eef4ff;
+  --color-blue-100: #dde9ff;
+  --color-blue-200: #bcd3ff;
+  --color-blue-300: #8db4ff;
+  --color-blue-400: #4d89ff;
+  --color-blue-500: #1a68ff;
+  --color-blue-600: #0057ff;
+  --color-blue-700: #0046d1;
+  --color-blue-800: #0f3a8f;
+  --color-blue-900: #0a1c3a;
+
+  --color-google-blue: #0057ff;
   --color-google-red: #ea4335;
   --color-google-yellow: #fbbc04;
   --color-google-green: #34a853;

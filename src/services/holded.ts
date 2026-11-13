@@ -210,6 +210,35 @@ function mapTaskToV2Payload(task: any): any {
   };
 }
 
+function mapTaskUpdateToV2Payload(task: any): any {
+  if (!task) return task;
+  const payload: any = {};
+  if (task.name !== undefined) payload.name = task.name;
+  if (task.description !== undefined) payload.description = task.description;
+  if (task.due_date !== undefined || task.dueDate !== undefined) {
+    payload.due_date = task.dueDate !== undefined ? task.dueDate : task.due_date;
+  }
+  if (task.priority !== undefined) {
+    payload.priority = Number(task.priority);
+  }
+  if (task.status !== undefined) {
+    payload.status = task.status;
+  }
+  if (task.assignedTo !== undefined || task.assigned_to !== undefined) {
+    payload.assigned_to = Array.isArray(task.assignedTo) ? task.assignedTo : (task.assigned_to || []);
+  }
+  // NOTE: Do NOT include project_id when updating; Holded v2 ignores priority and other task edits if project_id is sent
+  return payload;
+}
+
+function getLocalTodayIso(): string {
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, '0');
+  const d = String(now.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
 function mapTimeTrackingToV2Payload(data: any): any {
   if (!data) return data;
   return {
@@ -218,7 +247,7 @@ function mapTimeTrackingToV2Payload(data: any): any {
     description: data.desc || data.description,
     task_id: data.taskId || data.task_id,
     cost_per_hour: data.costHour !== undefined ? String(data.costHour) : (data.cost_per_hour || "0"),
-    date: data.date || new Date().toISOString().split('T')[0],
+    date: data.date || getLocalTodayIso(),
     category: data.category
   };
 }
@@ -355,12 +384,40 @@ export async function fetchHolded(url: string, apiKey: string, options: RequestI
 
 // --- SERVICES ---
 
+let cachedEmployees: any[] | null = null;
+let cachedEmployeesTimestamp = 0;
+
 export const teamService = {
-  getEmployees: async (apiKey: string) => {
-    const res = await fetchHolded(`${BASE_URL}/v2/employees`, apiKey);
-    const items = res && res.items ? res.items : (Array.isArray(res) ? res : []);
-    return items.map((emp: any) => ({
+  getEmployees: async (apiKey: string, forceRefresh = false) => {
+    if (!forceRefresh && cachedEmployees && Date.now() - cachedEmployeesTimestamp < 300000) {
+      return cachedEmployees;
+    }
+
+    let allItems: any[] = [];
+    let cursor: string | null = null;
+    let hasMore = true;
+    let pageCount = 0;
+    const maxPages = 4;
+
+    while (hasMore && pageCount < maxPages) {
+      let url = `${BASE_URL}/v2/employees?limit=100`;
+      if (cursor) url += `&cursor=${encodeURIComponent(cursor)}`;
+      const res = await fetchHolded(url, apiKey);
+      const items = res && res.items ? res.items : (Array.isArray(res) ? res : []);
+      allItems.push(...items);
+
+      if (items.length < 100 || !res?.has_more || !res?.cursor || res.cursor === cursor) {
+        hasMore = false;
+      } else {
+        cursor = res.cursor;
+        pageCount++;
+      }
+    }
+
+    const mapped = allItems.map((emp: any) => ({
       ...emp,
+      employeeId: emp.id,
+      rawHoldedUserId: emp.holded_user_id || emp.holdedUserId || null,
       holdedUserId: emp.holded_user_id || emp.holdedUserId || emp.id,
       firstName: emp.name || emp.firstName,
       lastName: emp.last_name || emp.lastName,
@@ -368,6 +425,10 @@ export const teamService = {
       email: emp.email,
       mainEmail: emp.email || emp.mainEmail
     }));
+
+    cachedEmployees = mapped;
+    cachedEmployeesTimestamp = Date.now();
+    return mapped;
   }
 };
 
@@ -379,37 +440,142 @@ export const contactsService = {
     code?: string; 
     custom_id?: string; 
     limit?: number; 
-    cursor?: string 
+    cursor?: string;
+    fetchAll?: boolean;
   }) => {
-    let url = `${BASE_URL}/v2/contacts`;
-    if (params) {
+    // Default: fetch single page of 100 contacts unless fetchAll is explicitly true
+    if (params?.fetchAll !== true) {
+      let url = `${BASE_URL}/v2/contacts?limit=${params?.limit || 100}`;
       const searchParams = new URLSearchParams();
-      if (params.phone) searchParams.set('phone', params.phone);
-      if (params.mobile) searchParams.set('mobile', params.mobile);
-      if (params.email) searchParams.set('email', params.email);
-      if (params.code) searchParams.set('code', params.code);
-      if (params.custom_id) searchParams.set('custom_id', params.custom_id);
-      if (params.limit) searchParams.set('limit', String(params.limit));
-      if (params.cursor) searchParams.set('cursor', params.cursor);
+      if (params?.phone) searchParams.set('phone', params.phone);
+      if (params?.mobile) searchParams.set('mobile', params.mobile);
+      if (params?.email) searchParams.set('email', params.email);
+      if (params?.code) searchParams.set('code', params.code);
+      if (params?.custom_id) searchParams.set('custom_id', params.custom_id);
+      if (params?.limit) searchParams.set('limit', String(params.limit));
+      if (params?.cursor) searchParams.set('cursor', params.cursor);
       const queryStr = searchParams.toString();
       if (queryStr) url += `?${queryStr}`;
+
+      const res = await fetchHolded(url, apiKey);
+      const rawItems = res && res.items ? res.items : (Array.isArray(res) ? res : []);
+      const items = rawItems.map(mapContactToV1);
+      (items as any).cursor = res?.cursor || null;
+      (items as any).hasMore = Boolean(res?.has_more);
+      return items;
     }
-    const res = await fetchHolded(url, apiKey);
-    const rawItems = res && res.items ? res.items : (Array.isArray(res) ? res : []);
-    const items = rawItems.map(mapContactToV1);
-    (items as any).cursor = res?.cursor || null;
-    (items as any).hasMore = Boolean(res?.has_more);
-    return items;
+
+    // Explicit fetchAll: safety limited to 5 pages (500 contacts) with duplicate protection
+    let allItems: any[] = [];
+    const seenContactIds = new Set<string>();
+    let cursor: string | null = null;
+    let hasMore = true;
+    let pageCount = 0;
+    const maxPages = 5;
+
+    while (hasMore && pageCount < maxPages) {
+      let url = `${BASE_URL}/v2/contacts?limit=100`;
+      if (params?.phone) url += `&phone=${encodeURIComponent(params.phone)}`;
+      if (params?.mobile) url += `&mobile=${encodeURIComponent(params.mobile)}`;
+      if (params?.email) url += `&email=${encodeURIComponent(params.email)}`;
+      if (params?.code) url += `&code=${encodeURIComponent(params.code)}`;
+      if (params?.custom_id) url += `&custom_id=${encodeURIComponent(params.custom_id)}`;
+      if (cursor) url += `&cursor=${encodeURIComponent(cursor)}`;
+
+      const res = await fetchHolded(url, apiKey);
+      const items = res && res.items ? res.items : (Array.isArray(res) ? res : []);
+      
+      let newCount = 0;
+      for (const item of items) {
+        if (item.id && !seenContactIds.has(item.id)) {
+          seenContactIds.add(item.id);
+          allItems.push(item);
+          newCount++;
+        }
+      }
+
+      if (items.length < 100 || newCount === 0 || !res?.has_more || !res?.cursor || res.cursor === cursor) {
+        hasMore = false;
+        break;
+      }
+
+      cursor = res.cursor;
+      pageCount++;
+    }
+
+    return allItems.map(mapContactToV1);
   },
   searchContacts: async (apiKey: string, query: { name: string; limit?: number; cursor?: string }) => {
-    let url = `${BASE_URL}/v2/contacts/search?name=${encodeURIComponent(query.name)}`;
-    if (query.limit) url += `&limit=${query.limit}`;
-    if (query.cursor) url += `&cursor=${encodeURIComponent(query.cursor)}`;
-    const res = await fetchHolded(url, apiKey);
-    const rawItems = res && res.items ? res.items : (Array.isArray(res) ? res : []);
-    const items = rawItems.map(mapContactToV1);
-    (items as any).cursor = res?.cursor || null;
-    (items as any).hasMore = Boolean(res?.has_more);
+    const searchTerm = (query.name || '').trim();
+    if (!searchTerm) return [];
+
+    const contactsMap = new Map<string, any>();
+
+    // 1. Holded v2 endpoint for search by name / tradeName
+    try {
+      let url = `${BASE_URL}/v2/contacts/search?name=${encodeURIComponent(searchTerm)}`;
+      if (query.limit) url += `&limit=${query.limit}`;
+      if (query.cursor) url += `&cursor=${encodeURIComponent(query.cursor)}`;
+      const res = await fetchHolded(url, apiKey);
+      const rawItems = res && res.items ? res.items : (Array.isArray(res) ? res : []);
+      for (const item of rawItems) {
+        const mapped = mapContactToV1(item);
+        contactsMap.set(mapped.id, mapped);
+      }
+    } catch (e) {
+      console.warn('Holded v2 /contacts/search by name notice:', e);
+    }
+
+    // 2. Also search by code (CIF / NIF / DNI) if term is at least 2 characters
+    if (searchTerm.length >= 2) {
+      try {
+        const codeRes = await fetchHolded(`${BASE_URL}/v2/contacts?code=${encodeURIComponent(searchTerm)}`, apiKey);
+        const codeItems = codeRes && codeRes.items ? codeRes.items : (Array.isArray(codeRes) ? codeRes : []);
+        for (const item of codeItems) {
+          const mapped = mapContactToV1(item);
+          contactsMap.set(mapped.id, mapped);
+        }
+      } catch (e) {
+        // ignore
+      }
+    }
+
+    // 3. Also search by email if term contains @
+    if (searchTerm.includes('@')) {
+      try {
+        const emailRes = await fetchHolded(`${BASE_URL}/v2/contacts?email=${encodeURIComponent(searchTerm)}`, apiKey);
+        const emailItems = emailRes && emailRes.items ? emailRes.items : (Array.isArray(emailRes) ? emailRes : []);
+        for (const item of emailItems) {
+          const mapped = mapContactToV1(item);
+          contactsMap.set(mapped.id, mapped);
+        }
+      } catch (e) {
+        // ignore
+      }
+    }
+
+    // 4. Also search by phone or mobile if numeric
+    const cleanDigits = searchTerm.replace(/[\s\-\+]/g, '');
+    if (cleanDigits.length >= 6 && /^\d+$/.test(cleanDigits)) {
+      try {
+        const [phoneRes, mobileRes] = await Promise.all([
+          fetchHolded(`${BASE_URL}/v2/contacts?phone=${encodeURIComponent(searchTerm)}`, apiKey).catch(() => null),
+          fetchHolded(`${BASE_URL}/v2/contacts?mobile=${encodeURIComponent(searchTerm)}`, apiKey).catch(() => null),
+        ]);
+        const phoneItems = phoneRes && phoneRes.items ? phoneRes.items : [];
+        const mobileItems = mobileRes && mobileRes.items ? mobileRes.items : [];
+        for (const item of [...phoneItems, ...mobileItems]) {
+          const mapped = mapContactToV1(item);
+          contactsMap.set(mapped.id, mapped);
+        }
+      } catch (e) {
+        // ignore
+      }
+    }
+
+    const items = Array.from(contactsMap.values());
+    (items as any).cursor = null;
+    (items as any).hasMore = false;
     return items;
   },
   createContact: async (apiKey: string, contact: any) => {
@@ -427,9 +593,30 @@ export const crmService = {
     return items.map(mapFunnel);
   },
   getLeads: async (apiKey: string) => {
-    const res = await fetchHolded(`${BASE_URL}/v2/leads`, apiKey);
-    const items = res && res.items ? res.items : (Array.isArray(res) ? res : []);
-    return items.map(mapLeadToV1);
+    let allItems: any[] = [];
+    let cursor: string | null = null;
+    let hasMore = true;
+    let pageCount = 0;
+    const maxPages = 20; // Upper limit safeguard (up to 2000 leads)
+
+    while (hasMore && pageCount < maxPages) {
+      let url = `${BASE_URL}/v2/leads?limit=100`;
+      if (cursor) {
+        url += `&cursor=${encodeURIComponent(cursor)}`;
+      }
+      const res = await fetchHolded(url, apiKey);
+      const items = res && res.items ? res.items : (Array.isArray(res) ? res : []);
+      allItems.push(...items);
+
+      if (res && res.has_more && res.cursor) {
+        cursor = res.cursor;
+        pageCount++;
+      } else {
+        hasMore = false;
+      }
+    }
+
+    return allItems.map(mapLeadToV1);
   },
   createLead: async (apiKey: string, lead: any) => {
     return fetchHolded(`${BASE_URL}/v2/leads`, apiKey, {
@@ -456,31 +643,29 @@ export const crmService = {
   },
   getActivities: async (apiKey: string, leadId: string) => {
     try {
-      const lead = await fetchHolded(`${BASE_URL}/v2/leads/${leadId}`, apiKey);
-      if (!lead) return [];
+      // API v2 uses the /events endpoint for CRM activities, which can be linked to a lead_id
+      const res = await fetchHolded(`${BASE_URL}/v2/events?limit=100`, apiKey);
+      const allEvents = res && res.items ? res.items : (Array.isArray(res) ? res : []);
       
-      const events = Array.isArray(lead.events) ? lead.events : [];
-      const tasks = Array.isArray(lead.tasks) ? lead.tasks : [];
+      // Filter by leadId since /events might return all events if query param is ignored
+      const leadEvents = allEvents.filter((e: any) => e.lead_id === leadId || e.leadId === leadId);
       
-      const mappedEvents = events.map((e: any) => ({
+      const getUnixSec = (val: any) => {
+        if (!val) return Math.floor(Date.now() / 1000);
+        const d = new Date(val);
+        return !isNaN(d.getTime()) ? Math.floor(d.getTime() / 1000) : Math.floor(Date.now() / 1000);
+      };
+
+      const mappedEvents = leadEvents.map((e: any) => ({
         id: e.id,
-        name: e.name || e.title || 'Evento de Oportunidad',
+        name: e.name || 'Actividad',
         desc: e.description || e.desc,
-        kind: e.kind || e.type || 'evento',
-        startDate: e.startDate || e.date || (e.created_at ? Math.floor(new Date(e.created_at).getTime() / 1000) : Math.floor(Date.now() / 1000)),
+        kind: e.kind || 'evento',
+        startDate: getUnixSec(e.start_date || e.date || e.created_at),
         status: e.status || 0
       }));
       
-      const mappedTasks = tasks.map((t: any) => ({
-        id: t.id,
-        name: t.name || t.title || 'Tarea de Oportunidad',
-        desc: t.description || t.desc,
-        kind: 'tarea',
-        startDate: t.startDate || t.due_date || (t.created_at ? Math.floor(new Date(t.created_at).getTime() / 1000) : Math.floor(Date.now() / 1000)),
-        status: t.status === 'completed' || t.completed ? 1 : 0
-      }));
-      
-      return [...mappedEvents, ...mappedTasks].sort((a, b) => b.startDate - a.startDate);
+      return mappedEvents.sort((a: any, b: any) => b.startDate - a.startDate);
     } catch (e) {
       console.error("Error getting activities from v2", e);
       return [];
@@ -490,37 +675,92 @@ export const crmService = {
     const leadId = activity.leadId;
     if (!leadId) throw new Error("leadId is required to create an activity");
     
-    if (activity.kind === 'tarea') {
-      return fetchHolded(`${BASE_URL}/v2/leads/${leadId}/tasks`, apiKey, {
-        method: 'POST',
-        body: JSON.stringify({
-          name: activity.name || 'Nueva tarea'
-        })
-      });
-    } else {
-      return fetchHolded(`${BASE_URL}/v2/leads/${leadId}/notes`, apiKey, {
-        method: 'POST',
-        body: JSON.stringify({
-          title: activity.name || 'Nota de actividad',
-          description: activity.desc || ''
-        })
-      });
-    }
+    const kindMap: Record<string, string> = {
+      llamada: 'call',
+      reunion: 'meeting',
+      email: 'email',
+      vuelo: 'flight',
+      comida: 'lunch',
+      tarea: 'task',
+      nota: 'note'
+    };
+    
+    const holdedKind = kindMap[activity.kind] || 'meeting';
+    
+    const startIso = activity.startDate 
+      ? new Date(activity.startDate * 1000).toISOString()
+      : new Date().toISOString();
+      
+    const endIso = activity.duration && activity.startDate
+      ? new Date((activity.startDate + activity.duration) * 1000).toISOString()
+      : new Date(Date.now() + 3600000).toISOString();
+
+    return fetchHolded(`${BASE_URL}/v2/events`, apiKey, {
+      method: 'POST',
+      body: JSON.stringify({
+        name: activity.name || 'Actividad',
+        description: activity.desc || '',
+        kind: holdedKind,
+        start_date: startIso,
+        end_date: endIso,
+        lead_id: leadId,
+        status: activity.status || 0
+      })
+    });
   }
 };
 
 export const projectsService = {
-  getProjects: async (apiKey: string, status?: string, cursor?: string, limit: number = 50) => {
-    let url = `${BASE_URL}/v2/projects?limit=${limit}`;
-    if (status && status !== 'all') {
-      url += `&status=${encodeURIComponent(status)}`;
-    }
+  getProjects: async (apiKey: string, status?: string, cursor?: string, limit: number = 100) => {
     if (cursor) {
+      let url = `${BASE_URL}/v2/projects?limit=${limit}`;
+      if (status && status !== 'all') {
+        url += `&status=${encodeURIComponent(status)}`;
+      }
       url += `&cursor=${encodeURIComponent(cursor)}`;
+      const res = await fetchHolded(url, apiKey);
+      const items = res && res.items ? res.items : (Array.isArray(res) ? res : []);
+      return items.map(mapProjectToV1);
     }
-    const res = await fetchHolded(url, apiKey);
-    const items = res && res.items ? res.items : (Array.isArray(res) ? res : []);
-    return items.map(mapProjectToV1);
+
+    let allItems: any[] = [];
+    const seenIds = new Set<string>();
+    let nextCursor: string | null = null;
+    let hasMore = true;
+    let pageCount = 0;
+    const maxPages = 5;
+
+    while (hasMore && pageCount < maxPages) {
+      let url = `${BASE_URL}/v2/projects?limit=${limit}`;
+      if (status && status !== 'all') {
+        url += `&status=${encodeURIComponent(status)}`;
+      }
+      if (nextCursor) {
+        url += `&cursor=${encodeURIComponent(nextCursor)}`;
+      }
+      const res = await fetchHolded(url, apiKey);
+      const items = res && res.items ? res.items : (Array.isArray(res) ? res : []);
+      
+      let newItemsFound = 0;
+      for (const item of items) {
+        if (item.id && !seenIds.has(item.id)) {
+          seenIds.add(item.id);
+          allItems.push(item);
+          newItemsFound++;
+        }
+      }
+
+      // If no new items found or fewer items than limit, stop immediately (prevents Holded infinite cursor loop bug)
+      if (items.length < limit || newItemsFound === 0 || !res?.has_more || !res?.cursor || res.cursor === nextCursor) {
+        hasMore = false;
+        break;
+      }
+
+      nextCursor = res.cursor;
+      pageCount++;
+    }
+
+    return allItems.map(mapProjectToV1);
   },
   getProject: async (apiKey: string, projectId: string) => {
     if (!projectId) throw new Error("projectId is required");
@@ -571,12 +811,46 @@ export const projectsService = {
       { id: "2", name: "Completado", type: 2 }
     ];
   },
-  getTasks: async (apiKey: string, cursor?: string, limit: number = 50) => {
-    let url = `${BASE_URL}/v2/tasks?limit=${limit}`;
-    if (cursor) url += `&cursor=${encodeURIComponent(cursor)}`;
-    const res = await fetchHolded(url, apiKey);
-    const items = res && res.items ? res.items : (Array.isArray(res) ? res : []);
-    return items.map(mapTaskToV1);
+  getTasks: async (apiKey: string, cursor?: string, limit: number = 100) => {
+    if (cursor) {
+      let url = `${BASE_URL}/v2/tasks?limit=${limit}&cursor=${encodeURIComponent(cursor)}`;
+      const res = await fetchHolded(url, apiKey);
+      const items = res && res.items ? res.items : (Array.isArray(res) ? res : []);
+      return items.map(mapTaskToV1);
+    }
+
+    let allItems: any[] = [];
+    const seenIds = new Set<string>();
+    let nextCursor: string | null = null;
+    let hasMore = true;
+    let pageCount = 0;
+    const maxPages = 5;
+
+    while (hasMore && pageCount < maxPages) {
+      let url = `${BASE_URL}/v2/tasks?limit=${limit}`;
+      if (nextCursor) url += `&cursor=${encodeURIComponent(nextCursor)}`;
+      const res = await fetchHolded(url, apiKey);
+      const items = res && res.items ? res.items : (Array.isArray(res) ? res : []);
+      
+      let newItemsFound = 0;
+      for (const item of items) {
+        if (item.id && !seenIds.has(item.id)) {
+          seenIds.add(item.id);
+          allItems.push(item);
+          newItemsFound++;
+        }
+      }
+
+      if (items.length < limit || newItemsFound === 0 || !res?.has_more || !res?.cursor || res.cursor === nextCursor) {
+        hasMore = false;
+        break;
+      }
+
+      nextCursor = res.cursor;
+      pageCount++;
+    }
+
+    return allItems.map(mapTaskToV1);
   },
   getTask: async (apiKey: string, taskId: string) => {
     if (!taskId) throw new Error("taskId is required");
@@ -593,7 +867,7 @@ export const projectsService = {
     if (!taskId) throw new Error("taskId is required");
     return fetchHolded(`${BASE_URL}/v2/tasks/${taskId}`, apiKey, {
       method: 'PUT',
-      body: JSON.stringify(mapTaskToV2Payload(task))
+      body: JSON.stringify(mapTaskUpdateToV2Payload(task))
     });
   },
   deleteTask: async (apiKey: string, taskId: string) => {
@@ -604,17 +878,112 @@ export const projectsService = {
   },
   addTimeTracking: async (apiKey: string, projectId: string, data: any) => {
     if (!projectId) throw new Error("projectId is required for addTimeTracking");
-    return fetchHolded(`${BASE_URL}/v2/projects/${projectId}/times`, apiKey, {
+    const payload = mapTimeTrackingToV2Payload(data);
+    const res = await fetchHolded(`${BASE_URL}/v2/projects/${projectId}/times`, apiKey, {
       method: "POST",
-      body: JSON.stringify(mapTimeTrackingToV2Payload(data))
+      body: JSON.stringify(payload)
     });
+
+    // Holded API v2 returns 201 { id: "" } without saving if user_id is a Team Employee ID
+    // instead of a Holded Account/Project User ID. Detect and resolve automatically.
+    if (!res || !res.id || String(res.id).trim() === '') {
+      try {
+        const [proj, empsRes] = await Promise.all([
+          fetchHolded(`${BASE_URL}/v2/projects/${projectId}`, apiKey).catch(() => null),
+          fetchHolded(`${BASE_URL}/v2/employees?limit=100`, apiKey).catch(() => null)
+        ]);
+
+        const emps = empsRes && empsRes.items ? empsRes.items : (Array.isArray(empsRes) ? empsRes : []);
+        const matchedEmp = emps.find((e: any) => e.id === payload.user_id || e.holded_user_id === payload.user_id);
+
+        let fallbackUserId: string | null = null;
+        if (matchedEmp && matchedEmp.holded_user_id && matchedEmp.holded_user_id !== payload.user_id) {
+          fallbackUserId = matchedEmp.holded_user_id;
+        }
+
+        if (!fallbackUserId && proj && proj.users && typeof proj.users === 'object') {
+          const userIds = Object.keys(proj.users);
+          if (matchedEmp) {
+            const empNameLower = (matchedEmp.full_name || matchedEmp.name || '').toLowerCase().trim();
+            const matchingProjUid = userIds.find(uid => {
+              const pUserName = (proj.users[uid]?.name || '').toLowerCase().trim();
+              return pUserName && empNameLower && (pUserName.includes(empNameLower) || empNameLower.includes(pUserName));
+            });
+            if (matchingProjUid) fallbackUserId = matchingProjUid;
+          }
+          if (!fallbackUserId && userIds.length > 0) {
+            fallbackUserId = userIds[0];
+          }
+        }
+
+        if (fallbackUserId && fallbackUserId !== payload.user_id) {
+          const retryPayload = { ...payload, user_id: fallbackUserId };
+          const retryRes = await fetchHolded(`${BASE_URL}/v2/projects/${projectId}/times`, apiKey, {
+            method: "POST",
+            body: JSON.stringify(retryPayload)
+          });
+          return { ...retryRes, resolvedUserId: fallbackUserId };
+        }
+      } catch (e) {
+        console.warn("Fallback user_id resolution for addTimeTracking failed:", e);
+      }
+    }
+
+    return { ...res, resolvedUserId: payload.user_id };
   },
-  getProjectTimes: async (apiKey: string, projectId: string, cursor?: string, limit: number = 50) => {
+  getProjectTimes: async (apiKey: string, projectId: string, cursor?: string, limit: number = 100) => {
     if (!projectId) throw new Error("projectId is required for getProjectTimes");
-    let url = `${BASE_URL}/v2/projects/${projectId}/times?limit=${limit}`;
-    if (cursor) url += `&cursor=${encodeURIComponent(cursor)}`;
-    const res = await fetchHolded(url, apiKey);
-    return res && res.items ? res.items : (Array.isArray(res) ? res : []);
+    if (cursor) {
+      let url = `${BASE_URL}/v2/projects/${projectId}/times?limit=${limit}&cursor=${encodeURIComponent(cursor)}`;
+      const res = await fetchHolded(url, apiKey);
+      const items = res && res.items ? res.items : (Array.isArray(res) ? res : []);
+      return items.map((t: any) => ({
+        ...t,
+        id: t.id,
+        duration: Number(t.duration) || 0,
+        taskId: t.task_id || t.taskId,
+        userId: t.user_id || t.userId,
+        userName: t.user_name || t.userName,
+        description: t.description || t.desc,
+        date: t.date,
+        costPerHour: t.cost_per_hour || t.costPerHour,
+        projectId: t.project_id || t.projectId || projectId
+      }));
+    }
+
+    let allItems: any[] = [];
+    let nextCursor: string | null = null;
+    let hasMore = true;
+    let pageCount = 0;
+    const maxPages = 10;
+
+    while (hasMore && pageCount < maxPages) {
+      let url = `${BASE_URL}/v2/projects/${projectId}/times?limit=${limit}`;
+      if (nextCursor) url += `&cursor=${encodeURIComponent(nextCursor)}`;
+      const res = await fetchHolded(url, apiKey);
+      const items = res && res.items ? res.items : (Array.isArray(res) ? res : []);
+      allItems.push(...items);
+
+      if (res && res.has_more && res.cursor) {
+        nextCursor = res.cursor;
+        pageCount++;
+      } else {
+        hasMore = false;
+      }
+    }
+
+    return allItems.map((t: any) => ({
+      ...t,
+      id: t.id,
+      duration: Number(t.duration) || 0,
+      taskId: t.task_id || t.taskId,
+      userId: t.user_id || t.userId,
+      userName: t.user_name || t.userName,
+      description: t.description || t.desc,
+      date: t.date,
+      costPerHour: t.cost_per_hour || t.costPerHour,
+      projectId: t.project_id || t.projectId || projectId
+    }));
   },
   getProjectTime: async (apiKey: string, projectId: string, timeId: string) => {
     if (!projectId || !timeId) throw new Error("projectId and timeId are required");
@@ -634,23 +1003,50 @@ export const projectsService = {
     });
   },
   getAllTimes: async (apiKey: string, cursor?: string, limit: number = 100) => {
-    let url = `${BASE_URL}/v2/project-times?limit=${limit}`;
-    if (cursor) url += `&cursor=${encodeURIComponent(cursor)}`;
-    const res = await fetchHolded(url, apiKey);
-    const items = res && res.items ? res.items : (Array.isArray(res) ? res : []);
-    
+    let allItems: any[] = [];
+    const seenIds = new Set<string>();
+    let nextCursor: string | null = cursor || null;
+    let hasMore = true;
+    let pageCount = 0;
+    const maxPages = cursor ? 1 : 5;
+
+    while (hasMore && pageCount < maxPages) {
+      let url = `${BASE_URL}/v2/project-times?limit=${limit}`;
+      if (nextCursor) url += `&cursor=${encodeURIComponent(nextCursor)}`;
+      const res = await fetchHolded(url, apiKey);
+      const items = res && res.items ? res.items : (Array.isArray(res) ? res : []);
+      
+      let newItemsFound = 0;
+      for (const item of items) {
+        if (item.id && !seenIds.has(item.id)) {
+          seenIds.add(item.id);
+          allItems.push(item);
+          newItemsFound++;
+        }
+      }
+
+      if (items.length < limit || newItemsFound === 0 || !res?.has_more || !res?.cursor || res.cursor === nextCursor) {
+        hasMore = false;
+        break;
+      }
+
+      nextCursor = res.cursor;
+      pageCount++;
+    }
+
     // Format the items to match the nested array shape expected by the frontend
     return [
       {
-        timeTracking: items.map((t: any) => ({
+        timeTracking: allItems.map((t: any) => ({
           id: t.id,
-          duration: t.duration,
+          duration: Number(t.duration) || 0,
           taskId: t.task_id || t.taskId,
           userId: t.user_id || t.userId,
           userName: t.user_name || t.userName,
           description: t.description || t.desc,
           date: t.date,
-          costPerHour: t.cost_per_hour || t.costPerHour
+          costPerHour: t.cost_per_hour || t.costPerHour,
+          projectId: t.project_id || t.projectId
         }))
       }
     ];

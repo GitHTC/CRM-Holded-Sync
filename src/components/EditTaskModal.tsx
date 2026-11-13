@@ -2,11 +2,13 @@ import React, { useState } from 'react';
 import { projectsService } from '../services/holded';
 import { useAppContext } from '../context/AppContext';
 import { X, CheckSquare, Trash2, Calendar, AlertCircle, Check } from 'lucide-react';
+import { toDateInputValue } from '../lib/dateUtils';
+import { stripHtml } from '../lib/format';
 
 interface EditTaskModalProps {
   task: any;
   onClose: () => void;
-  onUpdated: () => void;
+  onUpdated: (updatedTask?: any) => void;
   onDeleted: () => void;
 }
 
@@ -14,8 +16,8 @@ export function EditTaskModal({ task, onClose, onUpdated, onDeleted }: EditTaskM
   const { holdedApiKey } = useAppContext();
   const [formData, setFormData] = useState({
     name: task.name || '',
-    description: task.description || '',
-    dueDate: task.dueDate || task.due_date || '',
+    description: stripHtml(task.description || ''),
+    dueDate: toDateInputValue(task.dueDate || task.due_date),
     priority: task.priority !== undefined ? Number(task.priority) : 0,
     status: task.status || 'todo'
   });
@@ -36,7 +38,6 @@ export function EditTaskModal({ task, onClose, onUpdated, onDeleted }: EditTaskM
     setError(null);
     try {
       await projectsService.updateTask(holdedApiKey, task.id, {
-        project_id: task.projectId || task.project_id,
         name: formData.name.trim(),
         description: formData.description.trim(),
         due_date: formData.dueDate || null,
@@ -45,7 +46,14 @@ export function EditTaskModal({ task, onClose, onUpdated, onDeleted }: EditTaskM
         assigned_to: task.assignedTo || []
       });
 
-      onUpdated();
+      onUpdated({
+        id: task.id,
+        name: formData.name.trim(),
+        description: formData.description.trim(),
+        dueDate: formData.dueDate || null,
+        priority: formData.priority,
+        status: formData.status
+      });
       onClose();
     } catch (err: any) {
       setError("Error al actualizar la tarea: " + err.message);

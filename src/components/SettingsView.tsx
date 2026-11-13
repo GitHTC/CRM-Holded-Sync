@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useAppContext } from '../context/AppContext';
 import { teamService } from '../services/holded';
-import { User, CheckCircle2, LogIn, LogOut, Mail, RefreshCw, Key, AlertTriangle } from 'lucide-react';
+import { User, CheckCircle2, LogIn, LogOut, Mail, RefreshCw, Key, AlertTriangle, Download, Package } from 'lucide-react';
 
 export function SettingsView() {
   const { holdedApiKey, setHoldedApiKey, holdedUserId, setHoldedUserId, activeTab, setActiveTab } = useAppContext();
@@ -48,7 +48,7 @@ export function SettingsView() {
       setLoading(true);
       setErrorMsg('');
       const data = await teamService.getEmployees(key);
-      const employeesList = Array.isArray(data) ? data : (data.employees || []);
+      const employeesList = Array.isArray(data) ? data : ((data as any)?.employees || []);
       setEmployees(employeesList);
       if (employeesList.length === 0) {
         setErrorMsg('No se recuperaron empleados de Holded. Esto suele ocurrir si el Token API no tiene los permisos necesarios en Holded.');
@@ -378,6 +378,25 @@ export function SettingsView() {
             </div>
           </div>
         )}
+
+        {/* Descarga directa del paquete de la Extensión Chrome para ChromeOS */}
+        <div className="mt-8 p-4 bg-blue-50/70 border border-blue-200 rounded-xl space-y-2.5">
+          <div className="flex items-center gap-2 text-blue-900 font-semibold text-xs">
+            <Package size={16} className="text-blue-600" />
+            <span>Paquete Extensión Chrome v2.0.0</span>
+          </div>
+          <p className="text-[11px] text-blue-700/90 leading-relaxed">
+            Descarga directamente el archivo ZIP listo para instalar en modo desarrollador o subir a la Chrome Web Store.
+          </p>
+          <a
+            href="/api/download-extension"
+            download="holded-sync-v2.0.0.zip"
+            className="w-full bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold py-2.5 px-3 rounded-lg flex items-center justify-center gap-2 shadow-sm transition-all"
+          >
+            <Download size={14} />
+            Descargar holded-sync-v2.0.0.zip
+          </a>
+        </div>
       </div>
     </div>
   );

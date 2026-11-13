@@ -23,6 +23,7 @@ export function ContactsDirectoryModal({
   const { holdedApiKey } = useAppContext();
   const [searchTerm, setSearchTerm] = useState('');
   const [typeFilter, setTypeFilter] = useState<'all' | 'client' | 'lead' | 'supplier' | 'creditor' | 'debtor'>('all');
+  const [allContacts, setAllContacts] = useState<any[]>([]);
   const [contacts, setContacts] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -55,13 +56,52 @@ export function ContactsDirectoryModal({
     setError(null);
     try {
       if (query.trim()) {
-        const results = await contactsService.searchContacts(holdedApiKey, {
+        const q = query.trim().toLowerCase();
+        // 1. Live Holded v2 API search across name, code, email, phone
+        const apiResults = await contactsService.searchContacts(holdedApiKey, {
           name: query.trim(),
-          limit: 50
+          limit: 100
         });
-        setContacts(results);
+
+        // 2. Local search across the full database contacts cache
+        const localMatches = allContacts.filter(c => 
+          c.name?.toLowerCase().includes(q) ||
+          c.tradeName?.toLowerCase().includes(q) ||
+          c.email?.toLowerCase().includes(q) ||
+          c.code?.toLowerCase().includes(q) ||
+          c.vatNumber?.toLowerCase().includes(q) ||
+          c.phone?.includes(query.trim()) ||
+          c.mobile?.includes(query.trim()) ||
+          c.billAddress?.address?.toLowerCase().includes(q) ||
+          c.billAddress?.city?.toLowerCase().includes(q)
+        );
+
+        // 3. Deduplicate
+        const contactsMap = new Map<string, any>();
+        for (const item of apiResults) {
+          contactsMap.set(item.id, item);
+        }
+        for (const item of localMatches) {
+          if (!contactsMap.has(item.id)) {
+            contactsMap.set(item.id, item);
+          }
+        }
+
+        const merged = Array.from(contactsMap.values());
+        merged.sort((a, b) => {
+          const aName = (a.name || '').toLowerCase();
+          const bName = (b.name || '').toLowerCase();
+          if (aName === q && bName !== q) return -1;
+          if (aName !== q && bName === q) return 1;
+          if (aName.startsWith(q) && !bName.startsWith(q)) return -1;
+          if (!aName.startsWith(q) && bName.startsWith(q)) return 1;
+          return aName.localeCompare(bName);
+        });
+
+        setContacts(merged);
       } else {
-        const results = await contactsService.getContacts(holdedApiKey, { limit: 50 });
+        const results = await contactsService.getContacts(holdedApiKey, { fetchAll: true });
+        setAllContacts(results);
         setContacts(results);
       }
     } catch (err: any) {
@@ -187,11 +227,13 @@ export function ContactsDirectoryModal({
             <div>
               <div className="flex items-center gap-2">
                 <h2 className="text-base font-bold text-gray-800 font-google">Directorio de Contactos</h2>
-                <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 bg-blue-100 text-blue-700 rounded-full">
-                  Holded v2 Search
+                <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 bg-blue-100 text-blue-700 rounded-full font-mono">
+                  Holded v2 Global
                 </span>
               </div>
-              <p className="text-xs text-gray-400">Búsqueda rápida por prefijo y gestión de clientes y leads</p>
+              <p className="text-xs text-gray-400">
+                Búsqueda en toda tu base de contactos ({allContacts.length > 0 ? `${allContacts.length} contactos cargados` : 'conectado a API Holded v2'})
+              </p>
             </div>
           </div>
 
@@ -222,7 +264,7 @@ export function ContactsDirectoryModal({
               type="text"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              placeholder="Buscar contactos por nombre en Holded (autocompletado por prefijo v2)..."
+              placeholder="Buscar en todos tus contactos (nombre, nombre comercial, CIF/NIF, email, teléfono, ciudad...)..."
               className="w-full pl-10 pr-10 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-sm text-gray-800 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"
               autoFocus
             />
@@ -268,7 +310,7 @@ export function ContactsDirectoryModal({
             </div>
 
             <span className="text-xs text-gray-400 shrink-0">
-              {filteredContacts.length} contactos
+              {filteredContacts.length} {allContacts.length > 0 ? `de ${allContacts.length}` : ''} contactos
             </span>
           </div>
         </div>

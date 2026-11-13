@@ -5,6 +5,7 @@ import { Spinner } from './Spinner';
 import { ContactsDirectoryModal } from './ContactsDirectoryModal';
 import { format } from 'date-fns';
 import { es } from 'date-fns/locale';
+import { formatSafeDate, parseSafeDate } from '../lib/dateUtils';
 import { LayoutGrid, List, Plus, Trash2, Edit2, ChevronDown, ChevronUp, Check, X, Search, User as UserIcon, Phone, Users, Mail, Plane, Utensils, FileText, StickyNote, Clock, Calendar, TrendingUp, Target, RefreshCw, Globe, MapPin, Briefcase } from 'lucide-react';
 import { cn } from '../lib/utils';
 
@@ -29,6 +30,7 @@ export function CRMView() {
   const [viewMode, setViewMode] = useState<'kanban' | 'list'>('kanban');
   const [selectedFunnel, setSelectedFunnel] = useState<string>('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'open' | 'won' | 'lost'>('all');
+  const [leadSearch, setLeadSearch] = useState('');
 
   const [isCreating, setIsCreating] = useState(false);
   const [newLead, setNewLead] = useState({ name: '', value: '', contactId: '', contactName: '' });
@@ -66,32 +68,108 @@ export function CRMView() {
   useEffect(() => {
     if (!holdedApiKey) return;
     const query = contactSearch.trim();
-    if (!query) {
-      setSearchedContacts(contacts.slice(0, 20));
-      return;
-    }
 
     const timer = setTimeout(async () => {
       setIsSearchingContacts(true);
       try {
-        const results = await contactsService.searchContacts(holdedApiKey, { name: query, limit: 30 });
-        setSearchedContacts(results);
+        let apiResults: any[] = [];
+        if (query) {
+          apiResults = await contactsService.searchContacts(holdedApiKey, { name: query, limit: 50 });
+        }
+
+        // Local matching across all loaded contacts from Holded database
+        const qLower = query.toLowerCase();
+        const localMatches = query 
+          ? contacts.filter(c => 
+              c.name?.toLowerCase().includes(qLower) || 
+              c.tradeName?.toLowerCase().includes(qLower) ||
+              c.email?.toLowerCase().includes(qLower) ||
+              c.code?.toLowerCase().includes(qLower) ||
+              c.mobile?.includes(query) ||
+              c.phone?.includes(query)
+            )
+          : contacts;
+
+        // Matches from existing CRM opportunities (leads)
+        const leadContactMatches = leads
+          .filter(l => {
+            if (!l.contactName) return false;
+            if (!query) return true;
+            return l.contactName.toLowerCase().includes(qLower) ||
+                   (l.personName && l.personName.toLowerCase().includes(qLower));
+          })
+          .map(l => ({
+            id: l.contactId || l.id,
+            name: l.contactName,
+            tradeName: l.personName ? `Persona: ${l.personName}` : undefined,
+            type: 'lead',
+            fromLead: true
+          }));
+
+        // Combine into unified map deduplicated by ID and normalized name
+        const combined = new Map<string, any>();
+        
+        // Priority 1: Direct API results from Holded v2
+        for (const item of apiResults) {
+          combined.set(item.id, item);
+        }
+
+        // Priority 2: Local matches from full Holded contacts cache
+        for (const item of localMatches) {
+          if (!combined.has(item.id)) {
+            combined.set(item.id, item);
+          }
+        }
+
+        // Priority 3: Contacts found in CRM opportunities
+        for (const item of leadContactMatches) {
+          const alreadyExists = Array.from(combined.values()).some(
+            existing => existing.name?.toLowerCase() === item.name?.toLowerCase()
+          );
+          if (!alreadyExists && !combined.has(item.id)) {
+            combined.set(item.id, item);
+          }
+        }
+
+        let list = Array.from(combined.values());
+
+        // Sort by relevance if there's a search term
+        if (query) {
+          list.sort((a, b) => {
+            const aName = (a.name || '').toLowerCase();
+            const bName = (b.name || '').toLowerCase();
+            const aExact = aName === qLower;
+            const bExact = bName === qLower;
+            if (aExact && !bExact) return -1;
+            if (!aExact && bExact) return 1;
+
+            const aStarts = aName.startsWith(qLower);
+            const bStarts = bName.startsWith(qLower);
+            if (aStarts && !bStarts) return -1;
+            if (!aStarts && bStarts) return 1;
+
+            return aName.localeCompare(bName);
+          });
+        }
+
+        setSearchedContacts(query ? list.slice(0, 50) : list.slice(0, 30));
       } catch (err) {
         console.warn('Fallback to local contacts search', err);
+        const qLower = query.toLowerCase();
         const filtered = contacts.filter(c => 
-          c.name?.toLowerCase().includes(query.toLowerCase()) || 
-          c.tradeName?.toLowerCase().includes(query.toLowerCase()) ||
-          c.email?.toLowerCase().includes(query.toLowerCase()) ||
-          c.code?.toLowerCase().includes(query.toLowerCase())
+          c.name?.toLowerCase().includes(qLower) || 
+          c.tradeName?.toLowerCase().includes(qLower) ||
+          c.email?.toLowerCase().includes(qLower) ||
+          c.code?.toLowerCase().includes(qLower)
         );
-        setSearchedContacts(filtered);
+        setSearchedContacts(filtered.slice(0, 30));
       } finally {
         setIsSearchingContacts(false);
       }
-    }, 200);
+    }, query ? 200 : 0);
 
     return () => clearTimeout(timer);
-  }, [contactSearch, holdedApiKey, contacts]);
+  }, [contactSearch, holdedApiKey, contacts, leads]);
 
   useEffect(() => {
     try {
@@ -239,8 +317,8 @@ export function CRMView() {
     e.preventDefault();
     if (!holdedApiKey || !selectedLead) return;
     try {
-      const startDateTime = new Date(`${newActivity.date}T${newActivity.startTime}`);
-      const endDateTime = new Date(`${newActivity.date}T${newActivity.endTime}`);
+      const startDateTime = parseSafeDate(`${newActivity.date}T${newActivity.startTime}`) || new Date();
+      const endDateTime = parseSafeDate(`${newActivity.date}T${newActivity.endTime}`) || new Date(startDateTime.getTime() + 3600000);
       
       await crmService.createActivity(holdedApiKey, {
         name: newActivity.title || ACTIVITY_TYPES.find(t => t.id === newActivity.type)?.name,
@@ -403,10 +481,22 @@ export function CRMView() {
   const currentFunnelInfo = funnels.find(f => f.id === selectedFunnel);
   const currentLeads = leads.filter(l => {
     if (l.funnelId !== selectedFunnel) return false;
-    if (statusFilter === 'open') return l.status === 0;
-    if (statusFilter === 'won') return l.status === 1;
-    if (statusFilter === 'lost') return l.status === 2 || l.status === -1;
-    return true; // 'all'
+    if (statusFilter === 'open' && l.status !== 0) return false;
+    if (statusFilter === 'won' && l.status !== 1) return false;
+    if (statusFilter === 'lost' && l.status !== 2 && l.status !== -1) return false;
+
+    if (leadSearch.trim()) {
+      const q = leadSearch.toLowerCase().trim();
+      const name = (l.name || '').toLowerCase();
+      const contactName = (l.contactName || '').toLowerCase();
+      const personName = (l.personName || '').toLowerCase();
+      const value = String(l.value || '');
+      const tags = Array.isArray(l.tags) ? l.tags.join(' ').toLowerCase() : '';
+      const matches = name.includes(q) || contactName.includes(q) || personName.includes(q) || value.includes(q) || tags.includes(q);
+      if (!matches) return false;
+    }
+
+    return true;
   });
   const filteredContacts = contacts.filter(c => c.name?.toLowerCase().includes(contactSearch.toLowerCase()));
 
@@ -440,19 +530,55 @@ export function CRMView() {
   return (
     <div className="p-4 pb-1 space-y-3 h-full flex flex-col bg-gray-50/50">
       <div className="flex justify-between items-center bg-white p-3 rounded-lg border border-gray-200 shadow-sm relative z-10 gap-2 flex-wrap">
-        <div className="flex-1 min-w-[180px] max-w-[240px]">
-          <select 
-            value={selectedFunnel}
-            onChange={e => setSelectedFunnel(e.target.value)}
-            className="w-full bg-gray-50 border border-gray-200 rounded px-2 py-1.5 text-sm font-semibold text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
-          >
-             {funnels.map(f => (
-                <option key={f.id} value={f.id}>{f.name}</option>
-             ))}
-          </select>
+        <div className="flex items-center gap-2 flex-1 min-w-[280px]">
+          {/* Funnel Selector */}
+          <div className="min-w-[150px] max-w-[220px]">
+            <select 
+              value={selectedFunnel}
+              onChange={e => setSelectedFunnel(e.target.value)}
+              className="w-full bg-gray-50 border border-gray-200 rounded px-2.5 py-1.5 text-sm font-semibold text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+            >
+               {funnels.map(f => (
+                  <option key={f.id} value={f.id}>{f.name}</option>
+               ))}
+            </select>
+          </div>
+
+          {/* Quick Search for Opportunities */}
+          <div className="relative flex-1 max-w-[320px]">
+            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" size={14} />
+            <input 
+              type="text"
+              placeholder="Buscar oportunidad o contacto..."
+              value={leadSearch}
+              onChange={e => setLeadSearch(e.target.value)}
+              className="w-full pl-8 pr-7 py-1.5 text-xs bg-gray-50 hover:bg-gray-100/70 focus:bg-white border border-gray-200 rounded focus:outline-none focus:ring-2 focus:ring-blue-500/20 text-gray-800 placeholder:text-gray-400 transition-all font-medium"
+            />
+            {leadSearch && (
+              <button
+                type="button"
+                onClick={() => setLeadSearch('')}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 p-0.5 rounded-full"
+                title="Limpiar búsqueda"
+              >
+                <X size={13} />
+              </button>
+            )}
+          </div>
         </div>
 
         <div className="flex items-center gap-2 flex-wrap">
+          {/* Reload button */}
+          <button
+            type="button"
+            onClick={loadData}
+            disabled={loading}
+            className="p-1.5 text-gray-500 hover:text-blue-600 hover:bg-blue-50 rounded border border-gray-200 text-xs font-semibold transition-colors disabled:opacity-50"
+            title="Recargar oportunidades de Holded"
+          >
+            <RefreshCw size={14} className={cn(loading && "animate-spin text-blue-600")} />
+          </button>
+
           {/* Button Direct Contacts Directory v2 */}
           <button
             type="button"
@@ -501,6 +627,25 @@ export function CRMView() {
         </div>
       </div>
 
+      {/* Search active notification banner */}
+      {leadSearch.trim() && (
+        <div className="flex items-center justify-between bg-blue-50/80 border border-blue-100 px-3.5 py-1.5 rounded-lg text-xs text-blue-900 animate-in fade-in">
+          <div className="flex items-center gap-2 truncate">
+            <Search size={13} className="text-blue-600 shrink-0" />
+            <span className="truncate">
+              Buscando en oportunidades: <strong className="font-semibold text-blue-950">"{leadSearch}"</strong> ({currentLeads.length} {currentLeads.length === 1 ? 'coincidencia' : 'coincidencias'})
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setLeadSearch('')}
+            className="text-[11px] font-semibold text-blue-600 hover:text-blue-800 underline shrink-0 ml-3 cursor-pointer"
+          >
+            Limpiar filtro
+          </button>
+        </div>
+      )}
+
       {/* KPI Dashboard Summary Banner */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 animate-in fade-in duration-300">
         <div className="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm flex items-center gap-3">
@@ -509,7 +654,14 @@ export function CRMView() {
           </div>
           <div className="min-w-0">
             <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Oportunidades</p>
-            <h3 className="text-sm font-bold text-gray-800 mt-0.5">{funnelStats.totalCount} leads</h3>
+            <h3 className="text-sm font-bold text-gray-800 mt-0.5">
+              {funnelStats.totalCount} leads
+              {leadSearch.trim() && (
+                <span className="text-xs font-normal text-blue-600 ml-1.5">
+                  ({currentLeads.length} {currentLeads.length === 1 ? 'coincidencia' : 'coincidencias'})
+                </span>
+              )}
+            </h3>
           </div>
         </div>
 
@@ -547,25 +699,45 @@ export function CRMView() {
       <div className="flex-1 overflow-auto -mx-4 px-4 pb-1">
         {viewMode === 'list' ? (
           <div className="space-y-2">
-            {currentLeads.map(lead => {
-              const stageName = currentFunnelInfo?.stages?.find((s:any) => s.stageId === lead.stageId)?.name || 'Desconocido';
-              return (
-                <div key={lead.id} onClick={() => { setSelectedLead(lead); setEditLeadData({ name: lead.name, value: lead.value }); }} className={`bg-white p-3 rounded-xl border-l-4 border-y border-r border-gray-200 flex justify-between items-center group cursor-pointer hover:shadow-md transition-all ${lead.status === 1 ? 'border-l-green-500' : (lead.status === 2 || lead.status === -1 ? 'border-l-red-500 opacity-70' : 'border-l-blue-400')}`}>
-                  <div className="flex-1 min-w-0">
-                    <h4 className="text-sm font-semibold text-gray-800 truncate">{lead.name || lead.contactName || '(Sin nombre)'}</h4>
-                    <div className="flex items-center text-[10px] text-gray-500 mt-1 gap-2">
-                       <span className="bg-gray-100 px-2 py-0.5 rounded font-bold uppercase tracking-wider">{stageName}</span>
-                       <span className="text-green-600 font-bold bg-green-50 px-2 py-0.5 rounded">{lead.value > 0 ? `€${lead.value}` : ''}</span>
+            {currentLeads.length === 0 ? (
+              <div className="bg-white rounded-2xl border border-gray-200 p-8 text-center max-w-md mx-auto my-8 shadow-sm">
+                <div className="w-12 h-12 bg-gray-100 text-gray-400 rounded-full flex items-center justify-center mx-auto mb-3">
+                  <Search size={20} />
+                </div>
+                <h4 className="text-sm font-bold text-gray-800">No se encontraron oportunidades</h4>
+                <p className="text-xs text-gray-500 mt-1">
+                  {leadSearch.trim() ? `No hay resultados para "${leadSearch}"` : 'No hay oportunidades en este embudo o filtro'}
+                </p>
+                {leadSearch.trim() && (
+                  <button
+                    onClick={() => setLeadSearch('')}
+                    className="mt-3 px-3 py-1.5 text-xs font-semibold text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-lg transition-colors"
+                  >
+                    Limpiar búsqueda
+                  </button>
+                )}
+              </div>
+            ) : (
+              currentLeads.map(lead => {
+                const stageName = currentFunnelInfo?.stages?.find((s:any) => s.stageId === lead.stageId)?.name || 'Desconocido';
+                return (
+                  <div key={lead.id} onClick={() => { setSelectedLead(lead); setEditLeadData({ name: lead.name, value: lead.value }); }} className={`bg-white p-3 rounded-xl border-l-4 border-y border-r border-gray-200 flex justify-between items-center group cursor-pointer hover:shadow-md transition-all ${lead.status === 1 ? 'border-l-green-500' : (lead.status === 2 || lead.status === -1 ? 'border-l-red-500 opacity-70' : 'border-l-blue-400')}`}>
+                    <div className="flex-1 min-w-0">
+                      <h4 className="text-sm font-semibold text-gray-800 truncate">{lead.name || lead.contactName || '(Sin nombre)'}</h4>
+                      <div className="flex items-center text-[10px] text-gray-500 mt-1 gap-2">
+                         <span className="bg-gray-100 px-2 py-0.5 rounded font-bold uppercase tracking-wider">{stageName}</span>
+                         <span className="text-green-600 font-bold bg-green-50 px-2 py-0.5 rounded">{lead.value > 0 ? `€${lead.value}` : ''}</span>
+                      </div>
+                    </div>
+                    <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <button onClick={(e) => { e.stopPropagation(); handleDeleteLead(lead.id) }} className="p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-full transition-colors">
+                        <Trash2 size={16} />
+                      </button>
                     </div>
                   </div>
-                  <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                    <button onClick={(e) => { e.stopPropagation(); handleDeleteLead(lead.id) }} className="p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-full transition-colors">
-                      <Trash2 size={16} />
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
+                );
+              })
+            )}
           </div>
         ) : (
           <div className="flex gap-4 h-full pb-1 overflow-x-auto snap-x snap-mandatory pr-4">
@@ -705,7 +877,7 @@ export function CRMView() {
                      onChange={e => { setContactSearch(e.target.value); setShowContactDropdown(true); }}
                      onFocus={() => setShowContactDropdown(true)}
                      className="w-full border border-gray-200 rounded-xl pl-10 pr-10 py-3 text-sm focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all"
-                     placeholder="Buscar o escribir nombre de contacto..."
+                     placeholder="Buscar en todos los contactos de Holded (nombre, CIF, email...)..."
                    />
                    <Search className="absolute left-3.5 top-3.5 text-gray-400" size={16} />
                    {isSearchingContacts && (
@@ -1155,7 +1327,11 @@ export function CRMView() {
                       <div className="text-center py-8 text-gray-400 text-xs animate-pulse">Sincronizando historial...</div>
                     ) : activities.length > 0 ? (
                       activities.map((act: any) => {
-                        const typeInfo = ACTIVITY_TYPES.find(t => t.id === (act.kind || act.type)) || ACTIVITY_TYPES[0];
+                        const mapHoldedKindToLocal = (kind: string) => {
+                          const map: Record<string, string> = { call: 'llamada', meeting: 'reunion', email: 'email', flight: 'vuelo', lunch: 'comida', task: 'tarea', note: 'nota', dinner: 'comida' };
+                          return map[kind] || kind;
+                        };
+                        const typeInfo = ACTIVITY_TYPES.find(t => t.id === mapHoldedKindToLocal(act.kind || act.type)) || ACTIVITY_TYPES[0];
                         const actName = act.name || act.title || 'Actividad sin título';
                         const actNotes = act.desc || act.notes;
                         const actDate = act.startDate || act.date;
@@ -1172,7 +1348,7 @@ export function CRMView() {
                                  {isCompleted && <div className="bg-green-100 p-1 rounded-full"><Check size={12} className="text-green-600" /></div>}
                                </div>
                                <p className="text-[10px] font-bold text-gray-400 mt-1 uppercase tracking-wider">
-                                 {typeInfo.name} • {actDate ? format(new Date(actDate * 1000), 'd MMM yyyy, HH:mm', { locale: es }) : ''}
+                                 {typeInfo.name} {actDate ? `• ${formatSafeDate(actDate, 'd MMM yyyy, HH:mm', { locale: es })}` : ''}
                                </p>
                                {actNotes && (
                                  <p className="text-xs text-gray-500 mt-2 line-clamp-3 leading-relaxed border-l-2 border-gray-100 pl-3 italic">

@@ -2,6 +2,8 @@ import React, { useState } from 'react';
 import { projectsService } from '../services/holded';
 import { useAppContext } from '../context/AppContext';
 import { X, Edit2, Trash2, Calendar, Tag, Check, AlertTriangle } from 'lucide-react';
+import { toDateInputValue } from '../lib/dateUtils';
+import { stripHtml } from '../lib/format';
 
 interface EditProjectModalProps {
   project: any;
@@ -15,9 +17,9 @@ export function EditProjectModal({ project, contacts, onClose, onUpdated, onDele
   const { holdedApiKey } = useAppContext();
   const [formData, setFormData] = useState({
     name: project.name || '',
-    description: project.description || '',
-    dueDate: project.dueDate || project.due_date || '',
-    startDate: project.startDate || project.start_date || '',
+    description: stripHtml(project.description || ''),
+    dueDate: toDateInputValue(project.dueDate || project.due_date),
+    startDate: toDateInputValue(project.startDate || project.start_date),
     contactId: project.contactId || project.contact_id || '',
     status: project.status !== undefined ? Number(project.status) : 0,
     billable: Boolean(project.billable),

@@ -40,14 +40,10 @@
   ],
   "permissions": [
     "storage",
-    "activeTab",
-    "identity",
-    "identity.email"
+    "identity"
   ],
   "host_permissions": [
-    "https://REPLACE_GATEWAY_URL/*",
-    "https://oauth2.googleapis.com/*",
-    "https://accounts.google.com/*"
+    "https://REPLACE_GATEWAY_URL/*"
   ],
   "web_accessible_resources": [
     {

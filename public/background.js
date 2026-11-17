@@ -66,7 +66,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       .then(async (token) => {
         await dropToken(token);
         // Revoca el permiso concedido para que la próxima vez se vuelva a elegir cuenta
-        await fetch(`https://accounts.google.com/o/oauth2/revoke?token=${token}`).catch(() => {});
+        await fetch(`https://accounts.google.com/o/oauth2/revoke?token=${token}`, { mode: 'no-cors' }).catch(() => {});
       })
       .catch(() => {})
       .finally(() => sendResponse({ ok: true }));

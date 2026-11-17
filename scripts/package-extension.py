@@ -39,7 +39,7 @@ def package_extension():
     os.makedirs(ext_dir, exist_ok=True)
 
     # Copy files needed for Chrome extension (exclude backend files server.cjs, etc.)
-    files_to_copy = ['manifest.json', 'background.js', 'content.js', 'config.js', 'index.html']
+    files_to_copy = ['manifest.json', 'background.js', 'content.js', 'gmail-send.js', 'config.js', 'index.html']
     for f in files_to_copy:
         src = os.path.join(dist_dir, f)
         if os.path.exists(src):

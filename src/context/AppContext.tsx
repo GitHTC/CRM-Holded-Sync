@@ -1,3 +1,4 @@
+import { storageGet, storageSet, storageRemove } from '../lib/storage';
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 
 const USER_ID_KEY = 'holded_user_id';
@@ -34,29 +35,6 @@ const AppContext = createContext<AppContextType | undefined>(undefined);
 
 const chromeApi = () => (typeof window !== 'undefined' ? (window as any).chrome : undefined);
 const inExtension = () => Boolean(chromeApi()?.runtime?.id);
-
-function storageGet(keys: string[]): Promise<Record<string, any>> {
-  const c = chromeApi();
-  if (c?.storage?.local) return new Promise(res => c.storage.local.get(keys, res));
-  const out: Record<string, any> = {};
-  keys.forEach(k => {
-    const v = localStorage.getItem(k);
-    if (v !== null) { try { out[k] = JSON.parse(v); } catch { out[k] = v; } }
-  });
-  return Promise.resolve(out);
-}
-
-function storageSet(obj: Record<string, any>) {
-  const c = chromeApi();
-  if (c?.storage?.local) c.storage.local.set(obj);
-  else Object.entries(obj).forEach(([k, v]) => localStorage.setItem(k, JSON.stringify(v)));
-}
-
-function storageRemove(keys: string[]) {
-  const c = chromeApi();
-  if (c?.storage?.local) c.storage.local.remove(keys);
-  keys.forEach(k => localStorage.removeItem(k));
-}
 
 function sendToBackground(message: any): Promise<any> {
   return new Promise((resolve, reject) => {

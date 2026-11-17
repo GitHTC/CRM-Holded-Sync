@@ -27,6 +27,15 @@
         "content.js"
       ],
       "run_at": "document_end"
+    },
+    {
+      "matches": [
+        "https://mail.google.com/*"
+      ],
+      "js": [
+        "gmail-send.js"
+      ],
+      "run_at": "document_idle"
     }
   ],
   "permissions": [

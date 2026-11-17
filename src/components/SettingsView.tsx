@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { isQuickLogEnabled, setQuickLogEnabled } from '../lib/quicklog';
 import { useAppContext } from '../context/AppContext';
 import { LogIn, LogOut, RefreshCw, ShieldCheck, AlertTriangle, UserRound } from 'lucide-react';
 
@@ -24,6 +25,15 @@ export function SettingsView() {
   const { profile, signIn, signOut, setActiveTab } = useAppContext();
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
+  const [quickLog, setQuickLog] = useState(true);
+
+  useEffect(() => { isQuickLogEnabled().then(setQuickLog); }, []);
+
+  const toggleQuickLog = () => {
+    const next = !quickLog;
+    setQuickLog(next);
+    setQuickLogEnabled(next);
+  };
 
   const handleSignIn = async () => {
     setLoading(true);
@@ -59,6 +69,21 @@ export function SettingsView() {
                   <p className="text-sm font-medium text-tech truncate">{profile.name}</p>
                   <p className="text-xs text-tech/60 truncate">{profile.email}</p>
                 </div>
+              </div>
+
+              <div className="bg-white border border-blue-100 rounded-xl p-4 mb-5 flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-sm font-medium text-tech">Aviso al enviar un correo</p>
+                  <p className="text-xs text-tech/60 mt-0.5 leading-relaxed">
+                    Al enviar un correo en Gmail, te propone imputar el tiempo a una tarea.
+                  </p>
+                </div>
+                <button
+                  role="switch" aria-checked={quickLog} onClick={toggleQuickLog}
+                  className={`relative shrink-0 w-11 h-6 rounded-full transition-colors ${quickLog ? 'bg-digital' : 'bg-gray-300'}`}
+                >
+                  <span className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform ${quickLog ? 'translate-x-5' : ''}`} />
+                </button>
               </div>
 
               <button

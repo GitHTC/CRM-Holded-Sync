@@ -10,6 +10,7 @@
  */
 import { Router, json, type Request, type Response, type NextFunction } from 'express';
 import { createHash } from 'crypto';
+import compression from 'compression';
 
 const HOLDED_BASE = 'https://api.holded.com/api';
 
@@ -32,6 +33,7 @@ const ALLOWED_PATHS: RegExp[] = [
   /^\/v2\/tasks(\/[\w-]+)?$/,
   /^\/v2\/projects(\/[\w-]+(\/(summary|times(\/[\w-]+)?))?)?$/,
   /^\/v2\/employees$/,
+  /^\/v2\/project-times$/,
 ];
 
 interface Session {
@@ -134,6 +136,75 @@ function rateLimit(email: string) {
   if (++h.n > 300) throw new HttpError(429, 'Demasiadas peticiones, espera un minuto');
 }
 
+
+// --- Listados completos (proyectos, tareas, tiempos) ---
+// Holded pagina con cursor (máx. 100 por página). En vez de que el navegador pida
+// páginas sueltas con un tope, el servidor recorre TODAS las páginas y devuelve el
+// listado completo. Se cachea 60 s y se invalida con cualquier escritura.
+const AGGREGATED = /^\/v2\/(tasks|projects|project-times)$/;
+const MAX_PAGES: Record<string, number> = { '/v2/tasks': 300, '/v2/projects': 100, '/v2/project-times': 60 };
+const AGG_TTL = 60_000;
+const AGG_BUDGET_MS = 25_000;
+const aggCache = new Map<string, { at: number; promise: Promise<any> }>();
+const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
+
+async function holdedGet(url: string): Promise<globalThis.Response> {
+  let r = await fetch(url, { headers: holdedHeaders() });
+  if (r.status === 429) {
+    await sleep(1000);
+    r = await fetch(url, { headers: holdedHeaders() });
+  }
+  return r;
+}
+
+async function fetchAllPages(path: string, query: URLSearchParams) {
+  const started = Date.now();
+  const items: any[] = [];
+  const seen = new Set<string>();
+  const max = MAX_PAGES[path] || 50;
+  let cursor: string | null = null;
+  let truncated = false;
+  for (let page = 0; page < max; page++) {
+    const q = new URLSearchParams(query);
+    q.delete('cursor');
+    q.set('limit', '100');
+    if (cursor) q.set('cursor', cursor);
+    const r = await holdedGet(`${HOLDED_BASE}${path}?${q.toString()}`);
+    if (!r.ok) {
+      if (page === 0) throw new HttpError(502, `Holded respondió ${r.status}`);
+      truncated = true;
+      break;
+    }
+    const body: any = await r.json();
+    const batch: any[] = Array.isArray(body) ? body : body.items || [];
+    let added = 0;
+    for (const it of batch) {
+      const id = it && it.id;
+      if (id === undefined || id === null) { items.push(it); added++; continue; }
+      if (!seen.has(id)) { seen.add(id); items.push(it); added++; }
+    }
+    if (Array.isArray(body) || !added || !body.has_more || !body.cursor || body.cursor === cursor) break;
+    cursor = body.cursor;
+    if (page === max - 1 || Date.now() - started > AGG_BUDGET_MS) { truncated = true; break; }
+  }
+  if (truncated) console.warn(`[gateway] listado truncado ${path}: ${items.length} elementos`);
+  return { items, has_more: false, cursor: null, total: items.length, truncated };
+}
+
+function getAllCached(path: string, query: URLSearchParams) {
+  const q = new URLSearchParams(query);
+  q.delete('cursor'); q.delete('limit');
+  q.sort();
+  const key = `${path}?${q.toString()}`;
+  const hit = aggCache.get(key);
+  if (hit && Date.now() - hit.at < AGG_TTL) return hit.promise;
+  const promise = fetchAllPages(path, query);
+  aggCache.set(key, { at: Date.now(), promise });
+  promise.catch(() => aggCache.delete(key));
+  if (aggCache.size > 200) aggCache.clear();
+  return promise;
+}
+
 interface AuthedRequest extends Request {
   userEmail?: string;
   employee?: any;
@@ -161,6 +232,7 @@ async function requireUser(req: AuthedRequest, res: Response, next: NextFunction
 
 export function createGateway(): Router {
   const router = Router();
+  router.use(compression());
   router.use(json({ limit: '1mb' }));
 
   // Perfil del propio usuario (único dato de empleados que sale del servidor).
@@ -189,6 +261,12 @@ export function createGateway(): Router {
       }
 
       const qs = req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '';
+
+      // Listados completos: el servidor recorre todas las páginas de Holded
+      const query = new URLSearchParams(qs.replace(/^\?/, ''));
+      if (req.method === 'GET' && AGGREGATED.test(path) && !query.get('cursor')) {
+        return res.json(await getAllCached(path, query));
+      }
       const hasBody = !['GET', 'HEAD', 'DELETE'].includes(req.method);
       const upstream = await fetch(`${HOLDED_BASE}${path}${qs}`, {
         method: req.method,
@@ -198,6 +276,7 @@ export function createGateway(): Router {
         },
         body: hasBody ? JSON.stringify(req.body ?? {}) : undefined,
       });
+      if (hasBody || req.method === 'DELETE') aggCache.clear(); // una escritura invalida los listados
       const text = await upstream.text();
       res
         .status(upstream.status)
